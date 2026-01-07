@@ -1,0 +1,139 @@
+---
+# Default variables for SMO deployment
+
+# Cluster Configuration
+cluster_type: "microk8s"  # Options: microk8s, k8s
+microk8s_version: "1.28"
+k8s_namespace: "onap"
+
+# Image Pre-pull Configuration
+prepull_images: true
+image_pull_parallel: 5  # Number of parallel image pulls
+image_pull_timeout: 600  # Timeout per image in seconds
+image_list_script: "{{ it_dep_dir }}/smo-install/scripts/sub-scripts/generate-image-list.sh"
+
+# Helm Configuration
+helm_version: "3.12.0"
+use_chartmuseum: false  # Set to true for air-gapped/custom chart scenarios
+charts_museum_port: 8080
+charts_museum_version: "latest"
+
+# Helm Repository Configuration (when not using ChartMuseum)
+helm_repos:
+  - name: stable
+    url: https://charts.helm.sh/stable
+  - name: bitnami
+    url: https://charts.bitnami.com/bitnami
+  - name: onap
+    url: https://nexus.onap.org/content/sites/oom-helm-prod
+  - name: oran
+    url: https://nexus.o-ran-sc.org/content/sites/helm-prod
+
+# Git Repository Configuration
+it_dep_repo: "https://gerrit.o-ran-sc.org/r/it/dep"
+it_dep_branch: "master"
+it_dep_dir: "/opt/o-ran-sc/it-dep"
+
+# Docker Configuration
+docker_registry: "nexus3.o-ran-sc.org:10002"
+enable_local_registry: false
+local_registry_port: 5000
+
+# SMO Components
+deploy_onap: true
+deploy_nonrtric: true
+deploy_oran_components: true
+
+# Deployment Flavor Configuration
+# Flavors define different deployment configurations (small, medium, large, etc.)
+# Available flavors are typically found in helm-override/<flavor>/ directory
+deployment_flavor: "default"  # Options: default, small, medium, large, cnf, custom
+deployment_mode: "release"     # Options: release, snapshot, latest
+
+# Override Files by Flavor
+# These map to the helm-override directory structure in the repo
+onap_override_file: "helm-override/{{ deployment_flavor }}/onap-override.yaml"
+nonrtric_override_file: "helm-override/{{ deployment_flavor }}/oran-override.yaml"
+simulators_override_file: "helm-override/{{ deployment_flavor }}/network-simulators-override.yaml"
+
+# Custom override files (leave empty to use flavor defaults)
+custom_onap_override: ""
+custom_nonrtric_override: ""
+custom_simulators_override: ""
+
+# Pre-configuration Options
+create_service_accounts: true
+create_rbac: true
+setup_secrets: true
+configure_persistent_storage: true
+
+# ONAP Credentials (change in production!)
+onap_admin_password: "demo123456!"
+onap_db_root_password: "secretpassword"
+onap_db_password: "password"
+
+# Post-configuration Options
+configure_integration: true
+setup_a1_interface: true
+configure_dmaap: true
+register_simulators: true
+run_smoke_tests: false  # Set to true for validation
+
+# Integration Endpoints
+a1_policy_endpoint: "http://policymanagementservice:9080"
+dmaap_mr_endpoint: "http://message-router:3904"
+sdnc_endpoint: "http://sdnc:8282"
+
+# ONAP Configuration
+onap_namespace: "onap"
+onap_components:
+  - portal
+  - policy
+  - aai
+  - sdc
+  - sdnc
+  - cds
+
+# Resource Limits
+min_cpu_cores: 8
+min_memory_gb: 32
+min_disk_gb: 100
+
+# Network Configuration
+external_ip: ""  # Leave empty for auto-detection
+ingress_enabled: true
+
+# Timeouts (in seconds)
+helm_timeout: 3600
+pod_ready_timeout: 1800
+
+# Override files
+smo_override_file: ""
+onap_override_file: ""
+nonrtric_override_file: ""
+
+# Cleanup options
+cleanup_on_failure: false
+force_reinstall: false
+
+# Post-Renderer Configuration for Image Tag Modification
+enable_post_renderer: false  # Set to true to enable post-rendering
+post_renderer_script: "{{ it_dep_dir }}/helm-post-renderer.sh"
+post_renderer_config: "/tmp/post-renderer-config.yaml"
+
+# Image Tag Mappings
+# Format: "old_image:old_tag -> new_image:new_tag"
+# Or: "image_name:old_tag -> new_tag" (tag-only change)
+# Or: "*:old_tag -> new_tag" (global tag replacement)
+image_tag_mappings: []
+# Example:
+#   - "nexus3.onap.org:10001/onap/aai:1.0.0 -> myregistry.com/onap/aai:1.0.1"
+#   - "policy-apex-pdp:latest -> policy-apex-pdp:2.8.2"
+#   - "*:latest -> stable"
+
+# Global image tag override (applies to all images with 'latest' tag)
+global_image_tag: ""  # e.g., "stable", "2.8.0", etc.
+
+# Component-specific tag overrides
+onap_image_tag: ""     # Override all ONAP component tags
+nonrtric_image_tag: ""  # Override all Non-RT RIC component tags

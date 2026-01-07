@@ -1,0 +1,32 @@
+---
+# File: roles/smo_deploy/meta/main.yml
+---
+galaxy_info:
+  role_name: smo_deploy
+  author: O-RAN SC
+  description: Deploy O-RAN Service Management and Orchestration (SMO) using Kubernetes and Helm
+  company: O-RAN Software Community
+  license: Apache-2.0
+  min_ansible_version: "2.10"
+  
+  platforms:
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+    - name: Debian
+      versions:
+        - buster
+        - bullseye
+  
+  galaxy_tags:
+    - oran
+    - 5g
+    - kubernetes
+    - helm
+    - onap
+    - smo
+    - networking
+    - cloud
+
+dependencies: []

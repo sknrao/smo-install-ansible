@@ -1,0 +1,116 @@
+# Post-deployment verification tasks
+
+- name: Wait for deployments to stabilize
+  pause:
+    seconds: 30
+  tags: verify
+
+- name: Check deployment status
+  shell: |
+    microk8s kubectl get deployments -n {{ onap_namespace }}
+  register: deployment_status
+  changed_when: false
+  tags: verify
+
+- name: Verify all deployments are ready
+  shell: |
+    microk8s kubectl get deployments -n {{ onap_namespace }} -o json | \
+    jq -r '.items[] | select(.status.readyReplicas != .status.replicas) | .metadata.name'
+  register: unready_deployments
+  changed_when: false
+  failed_when: false
+  tags: verify
+
+- name: Display deployment status
+  debug:
+    var: deployment_status.stdout_lines
+  tags: verify
+
+- name: Warn about unready deployments
+  debug:
+    msg: "Warning: The following deployments are not fully ready: {{ unready_deployments.stdout_lines }}"
+  when: unready_deployments.stdout != ""
+  tags: verify
+
+- name: Get Helm releases
+  shell: |
+    helm list -n {{ onap_namespace }}
+  register: helm_releases
+  changed_when: false
+  tags: verify
+
+- name: Display Helm releases
+  debug:
+    var: helm_releases.stdout_lines
+  tags: verify
+
+- name: Check ingress endpoints
+  shell: |
+    microk8s kubectl get ingress -n {{ onap_namespace }}
+  register: ingress_endpoints
+  changed_when: false
+  when: ingress_enabled
+  tags: verify
+
+- name: Display ingress endpoints
+  debug:
+    var: ingress_endpoints.stdout_lines
+  when: ingress_enabled
+  tags: verify
+
+- name: Get persistent volumes
+  shell: |
+    microk8s kubectl get pvc -n {{ onap_namespace }}
+  register: pvc_status
+  changed_when: false
+  tags: verify
+
+- name: Display PVC status
+  debug:
+    var: pvc_status.stdout_lines
+  tags: verify
+
+- name: Create deployment summary
+  set_fact:
+    deployment_summary:
+      cluster_ip: "{{ smo_external_ip }}"
+      namespace: "{{ onap_namespace }}"
+      helm_releases: "{{ helm_releases.stdout_lines }}"
+      total_pods: "{{ (pods_status.stdout_lines | length) - 1 }}"
+      deployment_time: "{{ ansible_date_time.iso8601 }}"
+  tags: verify
+
+- name: Display deployment summary
+  debug:
+    msg:
+      - "=========================================="
+      - "SMO Deployment Summary"
+      - "=========================================="
+      - "Cluster IP: {{ deployment_summary.cluster_ip }}"
+      - "Namespace: {{ deployment_summary.namespace }}"
+      - "Total Pods: {{ deployment_summary.total_pods }}"
+      - "Deployment Time: {{ deployment_summary.deployment_time }}"
+      - "=========================================="
+      - "Access the SMO at: http://{{ deployment_summary.cluster_ip }}"
+      - "=========================================="
+  tags: verify
+
+- name: Save deployment info to file
+  copy:
+    content: |
+      SMO Deployment Information
+      ==========================
+      Deployment Date: {{ deployment_summary.deployment_time }}
+      Cluster IP: {{ deployment_summary.cluster_ip }}
+      Namespace: {{ deployment_summary.namespace }}
+      
+      Helm Releases:
+      {{ helm_releases.stdout }}
+      
+      Pods Status:
+      {{ pods_status.stdout }}
+      
+      Services:
+      {{ services_status.stdout }}
+    dest: "{{ it_dep_dir }}/smo-deployment-info.txt"
+  tags: verify

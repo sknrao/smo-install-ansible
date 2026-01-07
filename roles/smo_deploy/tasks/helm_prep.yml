@@ -1,0 +1,299 @@
+# Helm preparation and chart setup tasks
+
+- name: Check if Helm is installed
+  command: helm version
+  register: helm_check
+  failed_when: false
+  changed_when: false
+  tags: helm
+
+- name: Install Helm 3
+  block:
+    - name: Download Helm installation script
+      get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get_helm.sh
+        mode: '0700'
+      tags: helm
+
+    - name: Install Helm
+      command: /tmp/get_helm.sh
+      tags: helm
+
+    - name: Verify Helm installation
+      command: helm version
+      register: helm_version_output
+      changed_when: false
+      tags: helm
+
+    - name: Display Helm version
+      debug:
+        var: helm_version_output.stdout
+      tags: helm
+
+  when: helm_check.rc != 0
+
+- name: Install ONAP custom Helm plugins (deploy and undeploy)
+  block:
+    - name: Ensure Helm plugins directory exists
+      file:
+        path: "{{ ansible_env.HOME }}/.local/share/helm/plugins"
+        state: directory
+        mode: '0755'
+      tags: helm
+
+    - name: Check if OOM repository has been cloned
+      stat:
+        path: "{{ it_dep_dir }}"
+      register: oom_repo
+      tags: helm
+
+    - name: Clone OOM repository if not present
+      git:
+        repo: "{{ it_dep_repo }}"
+        dest: "{{ it_dep_dir }}"
+        version: "{{ it_dep_branch }}"
+        force: yes
+      when: not oom_repo.stat.exists
+      tags: helm
+
+    - name: Initialize OOM submodules for ONAP charts
+      shell: |
+        cd {{ it_dep_dir }}
+        git submodule update --init --recursive
+      args:
+        chdir: "{{ it_dep_dir }}"
+      tags: helm
+
+    - name: Check if deploy plugin already installed
+      stat:
+        path: "{{ ansible_env.HOME }}/.local/share/helm/plugins/deploy"
+      register: deploy_plugin
+      tags: helm
+
+    - name: Install ONAP deploy plugin from OOM
+      shell: |
+        helm plugin install {{ it_dep_dir }}/smo-install/oom/kubernetes/helm/plugins/deploy
+      when: not deploy_plugin.stat.exists
+      register: deploy_install
+      failed_when: deploy_install.rc != 0 and 'plugin already exists' not in deploy_install.stderr
+      tags: helm
+
+    - name: Check if undeploy plugin already installed
+      stat:
+        path: "{{ ansible_env.HOME }}/.local/share/helm/plugins/undeploy"
+      register: undeploy_plugin
+      tags: helm
+
+    - name: Install ONAP undeploy plugin from OOM
+      shell: |
+        helm plugin install {{ it_dep_dir }}/smo-install/oom/kubernetes/helm/plugins/undeploy
+      when: not undeploy_plugin.stat.exists
+      register: undeploy_install
+      failed_when: undeploy_install.rc != 0 and 'plugin already exists' not in undeploy_install.stderr
+      tags: helm
+
+    - name: Verify custom Helm plugins are installed
+      command: helm plugin list
+      register: helm_plugins
+      changed_when: false
+      tags: helm
+
+    - name: Display installed Helm plugins
+      debug:
+        var: helm_plugins.stdout_lines
+      tags: helm
+
+    - name: Verify deploy and undeploy plugins are present
+      assert:
+        that:
+          - "'deploy' in helm_plugins.stdout"
+          - "'undeploy' in helm_plugins.stdout"
+        fail_msg: "ONAP custom Helm plugins (deploy/undeploy) are not properly installed"
+        success_msg: "ONAP custom Helm plugins successfully installed"
+      tags: helm
+
+  tags: 
+    - helm
+    - plugins
+
+- name: Install helm-push plugin for ChartMuseum
+  block:
+    - name: Check if helm-push plugin is installed
+      command: helm plugin list
+      register: push_plugin_check
+      changed_when: false
+      tags: helm
+
+    - name: Install helm-push plugin
+      shell: |
+        helm plugin install https://github.com/chartmuseum/helm-push.git --version 0.10.3
+      when: "'push' not in push_plugin_check.stdout and 'cm-push' not in push_plugin_check.stdout"
+      register: push_install
+      failed_when: push_install.rc != 0 and 'plugin already exists' not in push_install.stderr
+      tags: helm
+
+  when: use_chartmuseum
+  tags: helm
+
+- name: Setup Helm repositories based on deployment method
+  block:
+    - name: Add upstream Helm repositories
+      shell: |
+        {% for repo in helm_repos %}
+        helm repo add {{ repo.name }} {{ repo.url }} || true
+        {% endfor %}
+      when: not use_chartmuseum
+      tags: helm
+
+    - name: Update Helm repositories
+      command: helm repo update
+      when: not use_chartmuseum
+      tags: helm
+
+    - name: List available charts from upstream
+      command: helm search repo -l
+      register: upstream_charts
+      changed_when: false
+      when: not use_chartmuseum
+      tags: helm
+
+    - name: Display available upstream charts
+      debug:
+        msg: "Using upstream Helm repositories. Charts available: {{ upstream_charts.stdout_lines | length }}"
+      when: not use_chartmuseum
+      tags: helm
+
+  when: not use_chartmuseum
+
+- name: Setup local ChartMuseum (optional)
+  block:
+    - name: Check if ChartMuseum is running
+      shell: |
+        docker ps | grep chartmuseum
+      register: chartmuseum_check
+      failed_when: false
+      changed_when: false
+      tags: helm
+
+    - name: Create charts directory
+      file:
+        path: "{{ it_dep_dir }}/smo-install/charts"
+        state: directory
+        mode: '0755'
+      tags: helm
+
+    - name: Start ChartMuseum container
+      shell: |
+        docker run -d \
+          --name chartmuseum \
+          --restart unless-stopped \
+          -p {{ charts_museum_port }}:8080 \
+          -e DEBUG=1 \
+          -e STORAGE=local \
+          -e STORAGE_LOCAL_ROOTDIR=/charts \
+          -v {{ it_dep_dir }}/smo-install/charts:/charts \
+          ghcr.io/helm/chartmuseum:{{ charts_museum_version }}
+      when: chartmuseum_check.rc != 0
+      tags: helm
+
+    - name: Wait for ChartMuseum to be ready
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ charts_museum_port }}"
+        delay: 5
+        timeout: 60
+      tags: helm
+
+    - name: Add local ChartMuseum repository
+      shell: |
+        helm repo add local http://127.0.0.1:{{ charts_museum_port }} || true
+        helm repo update
+      tags: helm
+
+    - name: Build ONAP charts from source
+      shell: |
+        cd {{ it_dep_dir }}/smo-install/oom/kubernetes
+        make clean || true
+        make SKIP_LINT=TRUE all
+      args:
+        executable: /bin/bash
+      environment:
+        HELM_BIN: helm
+      when: deploy_onap
+      register: onap_build
+      failed_when: false
+      tags: helm
+
+    - name: Package and upload ONAP charts to ChartMuseum
+      shell: |
+        cd {{ it_dep_dir }}/smo-install/oom/kubernetes/dist/packages
+        for chart in *.tgz; do
+          if [ -f "$chart" ]; then
+            curl --data-binary "@$chart" http://127.0.0.1:{{ charts_museum_port }}/api/charts
+          fi
+        done
+      args:
+        executable: /bin/bash
+      when: deploy_onap and onap_build.rc == 0
+      tags: helm
+
+    - name: Build Non-RT RIC charts from source
+      shell: |
+        cd {{ it_dep_dir }}/smo-install/nonrtric
+        for chart_dir in helm/*; do
+          if [ -d "$chart_dir" ]; then
+            helm package "$chart_dir"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      when: deploy_nonrtric
+      register: nonrtric_build
+      tags: helm
+
+    - name: Package and upload Non-RT RIC charts to ChartMuseum
+      shell: |
+        cd {{ it_dep_dir }}/smo-install/nonrtric
+        for chart in *.tgz; do
+          if [ -f "$chart" ]; then
+            curl --data-binary "@$chart" http://127.0.0.1:{{ charts_museum_port }}/api/charts
+          fi
+        done
+      args:
+        executable: /bin/bash
+      when: deploy_nonrtric and nonrtric_build.rc == 0
+      tags: helm
+
+    - name: Update local Helm repository
+      command: helm repo update
+      tags: helm
+
+    - name: List available local charts
+      command: helm search repo local/
+      register: local_charts
+      changed_when: false
+      tags: helm
+
+    - name: Display available local charts
+      debug:
+        var: local_charts.stdout_lines
+      tags: helm
+
+  when: use_chartmuseum
+
+- name: Verify Helm setup
+  shell: |
+    helm repo list
+  register: helm_repos_list
+  changed_when: false
+  tags: helm
+
+- name: Display configured Helm repositories
+  debug:
+    msg:
+      - "Configured Helm repositories:"
+      - "{{ helm_repos_list.stdout_lines }}"
+      - "ChartMuseum enabled: {{ use_chartmuseum }}"
+      - "Custom Helm plugins installed: deploy, undeploy"
+  tags: helm

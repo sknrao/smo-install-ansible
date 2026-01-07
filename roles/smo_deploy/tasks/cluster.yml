@@ -1,0 +1,104 @@
+# Kubernetes cluster deployment tasks
+
+- name: Clone or update it-dep repository
+  git:
+    repo: "{{ it_dep_repo }}"
+    dest: "{{ it_dep_dir }}"
+    version: "{{ it_dep_branch }}"
+    force: yes
+  tags: cluster
+
+- name: Check if MicroK8s is already installed
+  command: which microk8s
+  register: microk8s_check
+  failed_when: false
+  changed_when: false
+  tags: cluster
+
+- name: Install MicroK8s
+  block:
+    - name: Install MicroK8s snap
+      snap:
+        name: microk8s
+        classic: yes
+        channel: "{{ microk8s_version }}/stable"
+      tags: cluster
+
+    - name: Wait for MicroK8s to be ready
+      command: microk8s status --wait-ready
+      register: microk8s_status
+      retries: 10
+      delay: 30
+      until: microk8s_status.rc == 0
+      tags: cluster
+
+    - name: Add user to microk8s group
+      user:
+        name: "{{ ansible_user }}"
+        groups: microk8s
+        append: yes
+      tags: cluster
+
+    - name: Change ownership of .kube directory
+      file:
+        path: "{{ ansible_env.HOME }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        recurse: yes
+      tags: cluster
+
+  when: microk8s_check.rc != 0
+
+- name: Enable MicroK8s addons
+  command: "microk8s enable {{ item }}"
+  loop:
+    - dns
+    - storage
+    - ingress
+    - metallb:{{ smo_external_ip }}-{{ smo_external_ip }}
+  register: addon_result
+  changed_when: "'Enabling' in addon_result.stdout or 'enabled' in addon_result.stdout"
+  tags: cluster
+
+- name: Create kubectl alias
+  lineinfile:
+    path: "{{ ansible_env.HOME }}/.bashrc"
+    line: "alias kubectl='microk8s kubectl'"
+    create: yes
+  tags: cluster
+
+- name: Export kubeconfig
+  shell: |
+    microk8s config > {{ ansible_env.HOME }}/.kube/config
+  args:
+    creates: "{{ ansible_env.HOME }}/.kube/config"
+  tags: cluster
+
+- name: Wait for all system pods to be ready
+  shell: |
+    microk8s kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=600s
+  register: pods_ready
+  retries: 5
+  delay: 30
+  until: pods_ready.rc == 0
+  tags: cluster
+
+- name: Create ONAP namespace
+  shell: |
+    microk8s kubectl create namespace {{ onap_namespace }}
+  register: ns_result
+  failed_when: ns_result.rc != 0 and 'AlreadyExists' not in ns_result.stderr
+  changed_when: ns_result.rc == 0
+  tags: cluster
+
+- name: Display cluster status
+  command: microk8s kubectl get nodes
+  register: nodes_status
+  changed_when: false
+  tags: cluster
+
+- name: Show cluster information
+  debug:
+    var: nodes_status.stdout_lines
+  tags: cluster

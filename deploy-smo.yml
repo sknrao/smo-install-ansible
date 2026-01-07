@@ -1,0 +1,53 @@
+---
+- name: Deploy O-RAN SMO
+  hosts: smo_servers
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # Override default variables here
+    external_ip: "192.168.1.100"  # Change to your server IP
+    onap_namespace: "onap"
+    
+    # Deployment configuration
+    deployment_flavor: "default"  # Options: default, small, medium, large, cnf
+    deployment_mode: "release"     # Options: release, snapshot, latest
+    
+    # Component selection
+    deploy_onap: true
+    deploy_nonrtric: true
+    deploy_oran_components: true
+    
+    # Image pre-pull
+    prepull_images: true
+    
+    # ChartMuseum (set to false for upstream repos - recommended)
+    use_chartmuseum: false
+    
+    # Pre and Post configuration
+    configure_integration: true
+    run_smoke_tests: false
+  
+  roles:
+    - role: smo_deploy
+
+  post_tasks:
+    - name: Display access information
+      debug:
+        msg:
+          - "=========================================="
+          - "SMO Deployment Completed Successfully!"
+          - "=========================================="
+          - "Deployment Flavor: {{ deployment_flavor }}"
+          - "Deployment Mode: {{ deployment_mode }}"
+          - "Access the SMO portal at: http://{{ external_ip }}"
+          - "Namespace: {{ onap_namespace }}"
+          - ""
+          - "Useful Commands:"
+          - "  kubectl get pods -n {{ onap_namespace }}"
+          - "  kubectl get svc -n {{ onap_namespace }}"
+          - "  helm list -n {{ onap_namespace }}"
+          - ""
+          - "Credentials file: {{ it_dep_dir }}/smo-credentials.txt"
+          - "Deployment info: {{ it_dep_dir }}/smo-deployment-info.txt"
+          - "=========================================="

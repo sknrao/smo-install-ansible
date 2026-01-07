@@ -1,0 +1,95 @@
+# File: roles/smo_deploy/templates/smo-override.yml.j2
+# Jinja2 template for SMO Helm override values
+
+global:
+  repository: {{ docker_registry }}
+  pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    storageClass: microk8s-hostpath
+  
+  ingress:
+    enabled: {{ ingress_enabled | lower }}
+    virtualhost:
+      baseurl: "{{ smo_external_ip }}.nip.io"
+
+  flavor: small
+
+{% if deploy_onap %}
+# ONAP Component Configuration
+aai:
+  enabled: true
+  service:
+    type: NodePort
+
+sdc:
+  enabled: true
+  service:
+    type: NodePort
+
+sdnc:
+  enabled: true
+  service:
+    type: NodePort
+
+policy:
+  enabled: true
+  service:
+    type: NodePort
+
+portal:
+  enabled: true
+  service:
+    type: NodePort
+
+cds:
+  enabled: true
+  service:
+    type: NodePort
+{% endif %}
+
+{% if deploy_nonrtric %}
+# Non-RT RIC Configuration
+nonrtric:
+  enabled: true
+  policymanagementservice:
+    enabled: true
+  
+  controlpanel:
+    enabled: true
+    ingress:
+      enabled: {{ ingress_enabled | lower }}
+  
+  a1controller:
+    enabled: true
+  
+  a1simulator:
+    enabled: true
+    simulatorCount: 1
+{% endif %}
+
+# Resource Limits
+resources:
+  small:
+    limits:
+      cpu: 1
+      memory: 2Gi
+    requests:
+      cpu: 0.5
+      memory: 1Gi
+  
+  medium:
+    limits:
+      cpu: 2
+      memory: 4Gi
+    requests:
+      cpu: 1
+      memory: 2Gi
+  
+  large:
+    limits:
+      cpu: 4
+      memory: 8Gi
+    requests:
+      cpu: 2
+      memory: 4Gi

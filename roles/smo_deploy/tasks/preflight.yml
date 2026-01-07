@@ -1,0 +1,108 @@
+---
+# Pre-flight checks before deployment
+
+- name: Check if running as root or with sudo
+  fail:
+    msg: "This role must be run with root privileges or sudo"
+  when: ansible_user_uid != 0 and ansible_env.SUDO_USER is not defined
+  tags: preflight
+
+- name: Gather system facts
+  setup:
+    gather_subset:
+      - hardware
+      - network
+  tags: preflight
+
+- name: Check CPU cores
+  fail:
+    msg: "Insufficient CPU cores. Required: {{ min_cpu_cores }}, Available: {{ ansible_processor_vcpus }}"
+  when: ansible_processor_vcpus < min_cpu_cores
+  tags: preflight
+
+- name: Check memory
+  fail:
+    msg: "Insufficient memory. Required: {{ min_memory_gb }}GB, Available: {{ (ansible_memtotal_mb / 1024) | round(1) }}GB"
+  when: (ansible_memtotal_mb / 1024) < min_memory_gb
+  tags: preflight
+
+- name: Check disk space
+  shell: df -BG / | awk 'NR==2 {print $4}' | sed 's/G//'
+  register: available_disk
+  changed_when: false
+  tags: preflight
+
+- name: Verify disk space
+  fail:
+    msg: "Insufficient disk space. Required: {{ min_disk_gb }}GB, Available: {{ available_disk.stdout }}GB"
+  when: available_disk.stdout | int < min_disk_gb
+  tags: preflight
+
+- name: Install required packages
+  apt:
+    name:
+      - git
+      - curl
+      - wget
+      - jq
+      - python3
+      - python3-pip
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+  tags: preflight
+
+- name: Install required packages (RedHat)
+  yum:
+    name:
+      - git
+      - curl
+      - wget
+      - jq
+      - python3
+      - python3-pip
+    state: present
+  when: ansible_os_family == "RedHat"
+  tags: preflight
+
+- name: Install Python packages
+  pip:
+    name:
+      - kubernetes
+      - openshift
+      - pyyaml
+    state: present
+  tags: preflight
+
+- name: Create deployment directory
+  file:
+    path: "{{ it_dep_dir | dirname }}"
+    state: directory
+    mode: '0755'
+  tags: preflight
+
+- name: Detect external IP if not provided
+  shell: |
+    ip route get 8.8.8.8 | awk '{print $7; exit}'
+  register: detected_ip
+  when: external_ip == ""
+  changed_when: false
+  tags: preflight
+
+- name: Set external IP
+  set_fact:
+    smo_external_ip: "{{ external_ip if external_ip != '' else detected_ip.stdout }}"
+  tags: preflight
+
+- name: Display deployment configuration
+  debug:
+    msg:
+      - "SMO Deployment Configuration:"
+      - "Cluster Type: {{ cluster_type }}"
+      - "Kubernetes Namespace: {{ k8s_namespace }}"
+      - "External IP: {{ smo_external_ip }}"
+      - "Deploy ONAP: {{ deploy_onap }}"
+      - "Deploy Non-RT RIC: {{ deploy_nonrtric }}"
+      - "Deployment Flavor: {{ deployment_flavor }}"
+      - "Deployment Mode: {{ deployment_mode }}"
+  tags: preflight

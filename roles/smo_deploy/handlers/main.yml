@@ -1,0 +1,17 @@
+---
+# File: roles/smo_deploy/handlers/main.yml
+---
+# Handlers for SMO deployment
+
+- name: restart microk8s
+  command: microk8s stop && microk8s start
+  listen: "restart cluster"
+
+- name: restart chartmuseum
+  shell: |
+    docker restart chartmuseum
+  listen: "restart chartmuseum"
+
+- name: update helm repos
+  command: helm repo update
+  listen: "update helm"

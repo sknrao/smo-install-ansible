@@ -1,0 +1,27 @@
+# Helm Post-Renderer Configuration
+# Format: old_image:old_tag -> new_image:new_tag
+# Or: image_name:old_tag -> new_tag (for tag-only change)
+# Or: *:old_tag -> new_tag (for global tag replacement)
+
+# Example mappings:
+{% if image_tag_mappings is defined and image_tag_mappings | length > 0 %}
+{% for mapping in image_tag_mappings %}
+{{ mapping }}
+{% endfor %}
+{% endif %}
+
+# Global tag replacement (applies to all images)
+{% if global_image_tag is defined and global_image_tag != '' %}
+*:latest -> {{ global_image_tag }}
+{% endif %}
+
+# Component-specific tag replacements
+{% if onap_image_tag is defined and onap_image_tag != '' %}
+# ONAP components
+onap/*:* -> {{ onap_image_tag }}
+{% endif %}
+
+{% if nonrtric_image_tag is defined and nonrtric_image_tag != '' %}
+# Non-RT RIC components
+o-ran-sc/*:* -> {{ nonrtric_image_tag }}
+{% endif %}

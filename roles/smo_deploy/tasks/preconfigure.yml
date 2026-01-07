@@ -1,0 +1,154 @@
+# Pre-configuration tasks before SMO deployment
+
+- name: Create additional required namespaces
+  shell: |
+    microk8s kubectl create namespace {{ item }} || true
+  loop:
+    - network
+    - network-simulators  
+  register: ns_create
+  changed_when: "'created' in ns_create.stdout"
+  tags: preconfigure
+
+- name: Create service accounts
+  block:
+    - name: Create ONAP service account
+      shell: |
+        microk8s kubectl create serviceaccount onap-sa -n {{ onap_namespace }} || true
+      register: onap_sa
+      changed_when: "'created' in onap_sa.stdout"
+      tags: preconfigure
+
+    - name: Create NonRTRIC service account
+      shell: |
+        microk8s kubectl create serviceaccount nonrtric-sa -n {{ onap_namespace }} || true
+      register: nonrtric_sa
+      changed_when: "'created' in nonrtric_sa.stdout"
+      tags: preconfigure
+
+  when: create_service_accounts
+  tags: preconfigure
+
+- name: Setup RBAC
+  block:
+    - name: Create cluster role for SMO components
+      shell: |
+        cat <<EOF | microk8s kubectl apply -f -
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: smo-cluster-role
+        rules:
+        - apiGroups: [""]
+          resources: ["pods", "services", "endpoints", "configmaps", "secrets"]
+          verbs: ["get", "list", "watch", "create", "update", "patch"]
+        - apiGroups: ["apps"]
+          resources: ["deployments", "statefulsets"]
+          verbs: ["get", "list", "watch"]
+        EOF
+      register: cluster_role
+      changed_when: "'created' in cluster_role.stdout or 'configured' in cluster_role.stdout"
+      tags: preconfigure
+
+    - name: Bind cluster role to service accounts
+      shell: |
+        microk8s kubectl create clusterrolebinding smo-{{ item }}-binding \
+          --clusterrole=smo-cluster-role \
+          --serviceaccount={{ onap_namespace }}:{{ item }} || true
+      loop:
+        - onap-sa
+        - nonrtric-sa
+      register: role_binding
+      changed_when: "'created' in role_binding.stdout"
+      tags: preconfigure
+
+  when: create_rbac
+  tags: preconfigure
+
+- name: Setup secrets
+  block:
+    - name: Create ONAP credentials secret
+      shell: |
+        microk8s kubectl create secret generic onap-credentials \
+          -n {{ onap_namespace }} \
+          --from-literal=admin-password='{{ onap_admin_password }}' \
+          --from-literal=db-root-password='{{ onap_db_root_password }}' \
+          --from-literal=db-password='{{ onap_db_password }}' \
+          --dry-run=client -o yaml | microk8s kubectl apply -f -
+      register: onap_secret
+      changed_when: "'created' in onap_secret.stdout or 'configured' in onap_secret.stdout"
+      tags: preconfigure
+
+    - name: Create NonRTRIC credentials secret (if needed)
+      shell: |
+        microk8s kubectl create secret generic nonrtric-credentials \
+          -n {{ onap_namespace }} \
+          --from-literal=admin-password='{{ onap_admin_password }}' \
+          --dry-run=client -o yaml | microk8s kubectl apply -f -
+      register: nonrtric_secret
+      changed_when: "'created' in nonrtric_secret.stdout or 'configured' in nonrtric_secret.stdout"
+      tags: preconfigure
+
+  when: setup_secrets
+  tags: preconfigure
+
+- name: Configure persistent storage
+  block:
+    - name: Ensure MicroK8s storage is enabled
+      command: microk8s enable storage
+      register: storage_enable
+      changed_when: "'Enabling' in storage_enable.stdout"
+      tags: preconfigure
+
+    - name: Create PVC for ONAP data (if needed)
+      shell: |
+        cat <<EOF | microk8s kubectl apply -f -
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: onap-data-pvc
+          namespace: {{ onap_namespace }}
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+          storageClassName: microk8s-hostpath
+        EOF
+      register: pvc_create
+      changed_when: "'created' in pvc_create.stdout or 'configured' in pvc_create.stdout"
+      failed_when: false
+      tags: preconfigure
+
+  when: configure_persistent_storage
+  tags: preconfigure
+
+- name: Label nodes for SMO components
+  block:
+    - name: Get all nodes
+      shell: |
+        microk8s kubectl get nodes -o jsonpath='{.items[*].metadata.name}'
+      register: k8s_nodes
+      changed_when: false
+      tags: preconfigure
+
+    - name: Label nodes for SMO workloads
+      shell: |
+        microk8s kubectl label nodes {{ item }} smo-node=true --overwrite
+      loop: "{{ k8s_nodes.stdout.split() }}"
+      register: node_label
+      changed_when: "'labeled' in node_label.stdout"
+      tags: preconfigure
+
+  tags: preconfigure
+
+- name: Display pre-configuration summary
+  debug:
+    msg:
+      - "Pre-configuration completed:"
+      - "Service Accounts: {{ 'Created' if create_service_accounts else 'Skipped' }}"
+      - "RBAC: {{ 'Configured' if create_rbac else 'Skipped' }}"
+      - "Secrets: {{ 'Created' if setup_secrets else 'Skipped' }}"
+      - "Storage: {{ 'Configured' if configure_persistent_storage else 'Skipped' }}"
+  tags: preconfigure

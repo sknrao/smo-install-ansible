@@ -1,0 +1,55 @@
+---
+# Main tasks file for smo_deploy
+
+- name: Include pre-flight checks
+  include_tasks: preflight.yml
+  tags:
+    - preflight
+    - always
+
+- name: Include cluster deployment tasks
+  include_tasks: cluster.yml
+  tags:
+    - cluster
+    - deploy
+
+- name: Include pre-configuration tasks
+  include_tasks: preconfigure.yml
+  tags:
+    - preconfigure
+    - config
+    - deploy
+
+- name: Include Helm preparation tasks
+  include_tasks: helm_prep.yml
+  tags:
+    - helm
+    - deploy
+
+- name: Include image pre-pull tasks
+  include_tasks: prepull_images.yml
+  when: prepull_images
+  tags:
+    - prepull
+    - images
+    - deploy
+
+- name: Include SMO installation tasks
+  include_tasks: install.yml
+  tags:
+    - install
+    - deploy
+
+- name: Include post-configuration tasks
+  include_tasks: postconfigure.yml
+  when: configure_integration
+  tags:
+    - postconfigure
+    - config
+    - deploy
+
+- name: Include post-deployment verification
+  include_tasks: verify.yml
+  tags:
+    - verify
+    - deploy

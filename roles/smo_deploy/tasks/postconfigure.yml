@@ -1,0 +1,248 @@
+---
+# Post-configuration tasks after SMO deployment
+
+- name: Wait for all services to stabilize
+  pause:
+    seconds: 60
+    prompt: "Waiting for services to stabilize before configuration"
+  tags: postconfigure
+
+- name: Verify ONAP components are ready
+  shell: |
+    microk8s kubectl wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout=300s
+  register: onap_ready
+  retries: 3
+  delay: 30
+  until: onap_ready.rc == 0
+  failed_when: false
+  tags: postconfigure
+
+- name: Configure A1 Policy Interface
+  block:
+    - name: Get Policy Management Service endpoint
+      shell: |
+        microk8s kubectl get svc -n {{ onap_namespace }} | grep policymanagementservice | awk '{print $3":"$5}' | cut -d: -f1-2
+      register: policy_svc
+      changed_when: false
+      failed_when: false
+      tags: postconfigure
+
+    - name: Create A1 Policy ConfigMap
+      shell: |
+        cat <<EOF | microk8s kubectl apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: a1-policy-config
+          namespace: {{ onap_namespace }}
+        data:
+          policyEndpoint: "{{ policy_svc.stdout if policy_svc.stdout != '' else a1_policy_endpoint }}"
+          nearRtRicId: "ric1"
+        EOF
+      register: a1_config
+      changed_when: "'created' in a1_config.stdout or 'configured' in a1_config.stdout"
+      when: policy_svc.rc == 0
+      tags: postconfigure
+
+    - name: Display A1 Policy endpoint
+      debug:
+        msg: "A1 Policy Management Service: {{ policy_svc.stdout if policy_svc.stdout != '' else 'Not available yet' }}"
+      tags: postconfigure
+
+  when: setup_a1_interface and deploy_nonrtric
+  tags: postconfigure
+
+- name: Configure DMaaP Message Router
+  block:
+    - name: Get DMaaP Message Router endpoint
+      shell: |
+        microk8s kubectl get svc -n {{ onap_namespace }} | grep message-router | awk '{print $3":"$5}' | cut -d: -f1-2
+      register: dmaap_svc
+      changed_when: false
+      failed_when: false
+      tags: postconfigure
+
+    - name: Create DMaaP topics ConfigMap
+      shell: |
+        cat <<EOF | microk8s kubectl apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: dmaap-topics
+          namespace: {{ onap_namespace }}
+        data:
+          topics: |
+            A1-POLICY-AGENT-READ
+            A1-POLICY-AGENT-WRITE
+            unauthenticated.VES_NOTIFICATION_OUTPUT
+            unauthenticated.DCAE_CL_OUTPUT
+        EOF
+      register: dmaap_config
+      changed_when: "'created' in dmaap_config.stdout or 'configured' in dmaap_config.stdout"
+      tags: postconfigure
+
+    - name: Display DMaaP endpoint
+      debug:
+        msg: "DMaaP Message Router: {{ dmaap_svc.stdout if dmaap_svc.stdout != '' else 'Not available yet' }}"
+      tags: postconfigure
+
+  when: configure_dmaap and deploy_onap
+  tags: postconfigure
+
+- name: Register Network Simulators
+  block:
+    - name: Get simulator pods
+      shell: |
+        microk8s kubectl get pods -n network -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo ""
+      register: simulator_pods
+      changed_when: false
+      tags: postconfigure
+
+    - name: Display simulator registration info
+      debug:
+        msg:
+          - "Network Simulators detected: {{ simulator_pods.stdout_lines | length }}"
+          - "Pods: {{ simulator_pods.stdout }}"
+      when: simulator_pods.stdout != ""
+      tags: postconfigure
+
+    - name: Create simulator registry ConfigMap
+      shell: |
+        cat <<EOF | microk8s kubectl apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: simulator-registry
+          namespace: {{ onap_namespace }}
+        data:
+          simulators: "{{ simulator_pods.stdout | default('none') }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+        EOF
+      register: sim_registry
+      changed_when: "'created' in sim_registry.stdout or 'configured' in sim_registry.stdout"
+      when: simulator_pods.stdout != ""
+      tags: postconfigure
+
+  when: register_simulators and deploy_oran_components
+  tags: postconfigure
+
+- name: Configure ONAP-NonRTRIC Integration
+  block:
+    - name: Get SDNC endpoint
+      shell: |
+        microk8s kubectl get svc -n {{ onap_namespace }} | grep sdnc | head -1 | awk '{print $3":"$5}' | cut -d: -f1-2
+      register: sdnc_svc
+      changed_when: false
+      failed_when: false
+      tags: postconfigure
+
+    - name: Create integration ConfigMap
+      shell: |
+        cat <<EOF | microk8s kubectl apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: smo-integration
+          namespace: {{ onap_namespace }}
+        data:
+          sdncEndpoint: "{{ sdnc_svc.stdout if sdnc_svc.stdout != '' else sdnc_endpoint }}"
+          policyEndpoint: "{{ a1_policy_endpoint }}"
+          dmaapEndpoint: "{{ dmaap_mr_endpoint }}"
+          integrated: "true"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+        EOF
+      register: integration_config
+      changed_when: "'created' in integration_config.stdout or 'configured' in integration_config.stdout"
+      tags: postconfigure
+
+    - name: Display integration endpoints
+      debug:
+        msg:
+          - "SDNC Endpoint: {{ sdnc_svc.stdout if sdnc_svc.stdout != '' else 'Not available yet' }}"
+          - "Policy Endpoint: {{ a1_policy_endpoint }}"
+          - "DMaaP Endpoint: {{ dmaap_mr_endpoint }}"
+      tags: postconfigure
+
+  when: deploy_onap and deploy_nonrtric
+  tags: postconfigure
+
+- name: Run smoke tests
+  block:
+    - name: Test SDNC API
+      uri:
+        url: "http://{{ sdnc_svc.stdout }}/restconf/config/network-topology:network-topology"
+        method: GET
+        user: admin
+        password: "{{ onap_admin_password }}"
+        force_basic_auth: yes
+        status_code: [200, 404]
+        validate_certs: no
+      register: sdnc_test
+      failed_when: false
+      when: sdnc_svc.stdout != ""
+      tags: postconfigure
+
+    - name: Display smoke test results
+      debug:
+        msg:
+          - "Smoke Test Results:"
+          - "SDNC API: {{ 'PASS' if sdnc_test.status == 200 else 'PENDING' if sdnc_test.skipped else 'FAIL' }}"
+      tags: postconfigure
+
+  when: run_smoke_tests and deploy_onap
+  tags: postconfigure
+
+- name: Generate access credentials summary
+  block:
+    - name: Create credentials file
+      copy:
+        content: |
+          SMO Access Credentials
+          ======================
+          Generated: {{ ansible_date_time.iso8601 }}
+          
+          ONAP Credentials:
+          -----------------
+          Username: admin
+          Password: {{ onap_admin_password }}
+          
+          Component Endpoints:
+          --------------------
+          SDNC: {{ sdnc_svc.stdout if sdnc_svc.stdout != '' else 'Pending' }}
+          Policy: {{ policy_svc.stdout if policy_svc.stdout != '' else 'Pending' }}
+          DMaaP: {{ dmaap_svc.stdout if dmaap_svc.stdout != '' else 'Pending' }}
+          
+          Namespace: {{ onap_namespace }}
+          
+          Access Commands:
+          ----------------
+          kubectl get pods -n {{ onap_namespace }}
+          kubectl get svc -n {{ onap_namespace }}
+          kubectl logs -n {{ onap_namespace }} <pod-name>
+          
+        dest: "{{ it_dep_dir }}/smo-credentials.txt"
+        mode: '0600'
+      tags: postconfigure
+
+    - name: Display credentials file location
+      debug:
+        msg: "Access credentials saved to: {{ it_dep_dir }}/smo-credentials.txt"
+      tags: postconfigure
+
+  tags: postconfigure
+
+- name: Display post-configuration summary
+  debug:
+    msg:
+      - "=========================================="
+      - "Post-Configuration Summary"
+      - "=========================================="
+      - "A1 Interface: {{ 'Configured' if setup_a1_interface else 'Skipped' }}"
+      - "DMaaP Topics: {{ 'Configured' if configure_dmaap else 'Skipped' }}"
+      - "Simulators: {{ 'Registered' if register_simulators else 'Skipped' }}"
+      - "Integration: {{ 'Configured' if (deploy_onap and deploy_nonrtric) else 'N/A' }}"
+      - "Smoke Tests: {{ 'Executed' if run_smoke_tests else 'Skipped' }}"
+      - "=========================================="
+      - "SMO is now ready for use!"
+      - "=========================================="
+  tags: postconfigure

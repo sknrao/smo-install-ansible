@@ -1,0 +1,254 @@
+---
+# SMO installation tasks
+
+- name: Setup post-renderer if enabled
+  block:
+    - name: Create post-renderer script directory
+      file:
+        path: "{{ post_renderer_script | dirname }}"
+        state: directory
+        mode: '0755'
+      tags: install
+
+    - name: Copy post-renderer script
+      copy:
+        src: helm-post-renderer.sh
+        dest: "{{ post_renderer_script }}"
+        mode: '0755'
+      tags: install
+
+    - name: Generate post-renderer configuration
+      template:
+        src: post-renderer-config.yaml.j2
+        dest: "{{ post_renderer_config }}"
+        mode: '0644'
+      tags: install
+
+    - name: Display post-renderer configuration
+      debug:
+        msg:
+          - "Post-renderer enabled"
+          - "Script: {{ post_renderer_script }}"
+          - "Config: {{ post_renderer_config }}"
+          - "Image tag mappings: {{ image_tag_mappings | length }} mappings"
+      tags: install
+
+  when: enable_post_renderer
+  tags: 
+    - install
+    - post-renderer
+
+- name: Determine override files based on flavor and custom settings
+  set_fact:
+    effective_onap_override: "{{ custom_onap_override if custom_onap_override != '' else (it_dep_dir + '/smo-install/' + onap_override_file) }}"
+    effective_nonrtric_override: "{{ custom_nonrtric_override if custom_nonrtric_override != '' else (it_dep_dir + '/smo-install/' + nonrtric_override_file) }}"
+    effective_simulators_override: "{{ custom_simulators_override if custom_simulators_override != '' else (it_dep_dir + '/smo-install/' + simulators_override_file) }}"
+  tags: install
+
+- name: Check if flavor override files exist
+  stat:
+    path: "{{ item }}"
+  register: override_files_check
+  loop:
+    - "{{ effective_onap_override }}"
+    - "{{ effective_nonrtric_override }}"
+  when: deploy_onap or deploy_nonrtric
+  tags: install
+
+- name: Display override file status
+  debug:
+    msg:
+      - "Deployment Configuration:"
+      - "Flavor: {{ deployment_flavor }}"
+      - "Mode: {{ deployment_mode }}"
+      - "ONAP Override: {{ effective_onap_override }}"
+      - "Non-RT RIC Override: {{ effective_nonrtric_override }}"
+      - "Using ChartMuseum: {{ use_chartmuseum }}"
+  tags: install
+
+- name: Warn if override files are missing
+  debug:
+    msg: "WARNING: Override file {{ item.item }} not found. Using default values."
+  loop: "{{ override_files_check.results }}"
+  when: 
+    - override_files_check.results is defined
+    - not item.stat.exists
+  tags: install
+
+- name: Check if SMO is already deployed
+  shell: |
+    microk8s kubectl get deployment -n {{ onap_namespace }} | grep -i onap || true
+  register: smo_deployed
+  changed_when: false
+  tags: install
+
+- name: Uninstall existing SMO if force reinstall is enabled
+  block:
+    - name: Remove existing Helm releases
+      shell: |
+        for release in $(helm list -n {{ onap_namespace }} -q); do
+          helm uninstall $release -n {{ onap_namespace }}
+        done
+      tags: install
+
+    - name: Wait for pods to terminate
+      shell: |
+        microk8s kubectl wait --for=delete pods --all -n {{ onap_namespace }} --timeout=600s || true
+      tags: install
+
+  when: force_reinstall and smo_deployed.stdout != ""
+
+- name: Set Helm repository based on mode
+  set_fact:
+    helm_repo_suffix: "{{ '-staging' if deployment_mode == 'snapshot' else '' }}"
+  tags: install
+
+- name: Deploy ONAP components
+  shell: |
+    {% if use_chartmuseum %}
+    helm deploy {{ onap_namespace }} local/onap \
+    {% else %}
+    helm deploy {{ onap_namespace }} onap/onap{{ helm_repo_suffix }} \
+    {% endif %}
+      --namespace {{ onap_namespace }} \
+      --create-namespace \
+      {% if override_files_check.results[0].stat.exists %}
+      --values {{ effective_onap_override }} \
+      {% endif %}
+      --set global.flavor={{ deployment_flavor }} \
+      {% if enable_post_renderer %}
+      --post-renderer {{ post_renderer_script }} \
+      {% endif %}
+      --timeout {{ helm_timeout }}s
+  args:
+    chdir: "{{ it_dep_dir }}/smo-install"
+  environment:
+    POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
+  when: deploy_onap
+  register: onap_install
+  failed_when: onap_install.rc != 0 and not cleanup_on_failure
+  tags: install
+
+- name: Wait for ONAP deployments to stabilize
+  pause:
+    seconds: 60
+  when: deploy_onap and onap_install.rc == 0
+  tags: install
+
+- name: Deploy Non-RT RIC
+  shell: |
+    {% if use_chartmuseum %}
+    helm install nonrtric local/nonrtric \
+    {% else %}
+    helm install nonrtric oran/nonrtric{{ helm_repo_suffix }} \
+    {% endif %}
+      --namespace {{ onap_namespace }} \
+      {% if override_files_check.results[1].stat.exists %}
+      --values {{ effective_nonrtric_override }} \
+      {% endif %}
+      {% if enable_post_renderer %}
+      --post-renderer {{ post_renderer_script }} \
+      {% endif %}
+      --timeout {{ helm_timeout }}s \
+      --wait
+  args:
+    chdir: "{{ it_dep_dir }}/smo-install"
+  environment:
+    POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
+  when: deploy_nonrtric
+  register: nonrtric_install
+  failed_when: nonrtric_install.rc != 0 and not cleanup_on_failure
+  tags: install
+
+- name: Deploy Network Simulators (optional)
+  block:
+    - name: Check if simulators override file exists
+      stat:
+        path: "{{ effective_simulators_override }}"
+      register: simulators_override_check
+      tags: install
+
+    - name: Wait for ONAP and Non-RT RIC to be ready before deploying simulators
+      shell: |
+        microk8s kubectl wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout={{ pod_ready_timeout }}s
+      retries: 2
+      delay: 30
+      tags: install
+
+    - name: Deploy DU/RU Simulators
+      shell: |
+        {% if use_chartmuseum %}
+        helm install network-simulators local/network-simulators \
+        {% else %}
+        helm install network-simulators oran/network-simulators{{ helm_repo_suffix }} \
+        {% endif %}
+          --namespace network \
+          --create-namespace \
+          {% if simulators_override_check.stat.exists %}
+          --values {{ effective_simulators_override }} \
+          {% endif %}
+          {% if enable_post_renderer %}
+          --post-renderer {{ post_renderer_script }} \
+          {% endif %}
+          --timeout {{ helm_timeout }}s \
+          --wait
+      args:
+        chdir: "{{ it_dep_dir }}/smo-install"
+      environment:
+        POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
+      register: simulators_install
+      failed_when: simulators_install.rc != 0 and not cleanup_on_failure
+      tags: install
+
+  when: deploy_oran_components and (deploy_onap or deploy_nonrtric)
+  tags: 
+    - install
+    - simulators
+
+- name: Wait for all pods to be ready
+  shell: |
+    microk8s kubectl wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout={{ pod_ready_timeout }}s
+  register: pods_ready
+  retries: 3
+  delay: 60
+  until: pods_ready.rc == 0
+  failed_when: pods_ready.rc != 0 and not cleanup_on_failure
+  tags: install
+
+- name: Get all pods status
+  shell: |
+    microk8s kubectl get pods -n {{ onap_namespace }}
+  register: pods_status
+  changed_when: false
+  tags: install
+
+- name: Display pods status
+  debug:
+    var: pods_status.stdout_lines
+  tags: install
+
+- name: Get all services
+  shell: |
+    microk8s kubectl get services -n {{ onap_namespace }}
+  register: services_status
+  changed_when: false
+  tags: install
+
+- name: Display services
+  debug:
+    var: services_status.stdout_lines
+  tags: install
+
+- name: Cleanup on failure
+  block:
+    - name: Remove failed deployments
+      shell: |
+        helm list -n {{ onap_namespace }} -q | xargs -r helm uninstall -n {{ onap_namespace }}
+      tags: install
+
+    - name: Delete namespace
+      shell: |
+        microk8s kubectl delete namespace {{ onap_namespace }} --grace-period=0 --force || true
+      tags: install
+
+  when: cleanup_on_failure and (onap_install.failed | default(false) or nonrtric_install.failed | default(false))

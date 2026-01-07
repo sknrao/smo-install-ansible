@@ -1,0 +1,65 @@
+# Example 1: Minimal deployment with default flavor
+- name: Deploy SMO - Minimal (Default Flavor)
+  hosts: smo_servers
+  become: yes
+  vars:
+    deployment_flavor: "default"
+    deployment_mode: "release"
+  roles:
+    - smo_deploy
+
+---
+# Example 2: Small deployment for testing
+- name: Deploy SMO - Small Flavor for Testing
+  hosts: smo_servers
+  become: yes
+  vars:
+    deployment_flavor: "small"
+    deployment_mode: "snapshot"
+    deploy_onap: true
+    deploy_nonrtric: true
+    deploy_oran_components: false  # Skip simulators
+  roles:
+    - smo_deploy
+
+---
+# Example 3: CNF deployment with custom overrides
+- name: Deploy SMO - CNF Flavor with Custom Config
+  hosts: smo_servers
+  become: yes
+  vars:
+    deployment_flavor: "cnf"
+    deployment_mode: "release"
+    custom_onap_override: "/path/to/custom-onap-override.yaml"
+    use_chartmuseum: true  # Build from source
+  roles:
+    - smo_deploy
+
+---
+# Example 4: Latest/bleeding edge deployment
+- name: Deploy SMO - Latest Development Version
+  hosts: smo_servers
+  become: yes
+  vars:
+    deployment_flavor: "default"
+    deployment_mode: "latest"
+    it_dep_branch: "master"  # Use latest code
+  roles:
+    - smo_deploy
+
+---
+# Example 5: Production deployment with all components
+- name: Deploy SMO - Production (Large Flavor)
+  hosts: smo_servers
+  become: yes
+  vars:
+    deployment_flavor: "large"
+    deployment_mode: "release"
+    deploy_onap: true
+    deploy_nonrtric: true
+    deploy_oran_components: true
+    prepull_images: true
+    min_cpu_cores: 16
+    min_memory_gb: 64
+  roles:
+    - smo_deploy
