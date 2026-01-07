@@ -1,0 +1,89 @@
+---
+- name: Wait for Kubernetes API to be ready
+  wait_for:
+    host: "{{ ansible_default_ipv4.address }}"
+    port: 6443
+    timeout: 300
+
+- name: Download Calico operator manifest
+  get_url:
+    url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml"
+    dest: /tmp/tigera-operator.yaml
+    mode: '0644'
+
+- name: Install Calico operator
+  command: kubectl create -f /tmp/tigera-operator.yaml
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: calico_operator
+  failed_when: 
+    - calico_operator.rc != 0
+    - '"already exists" not in calico_operator.stderr'
+
+- name: Download Calico custom resources manifest
+  get_url:
+    url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml"
+    dest: /tmp/custom-resources.yaml
+    mode: '0644'
+
+- name: Update Calico CIDR in custom resources
+  replace:
+    path: /tmp/custom-resources.yaml
+    regexp: '192\.168\.0\.0\/16'
+    replace: "{{ k8s_pod_network_cidr }}"
+
+- name: Apply Calico custom resources
+  command: kubectl create -f /tmp/custom-resources.yaml
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: calico_cr
+  failed_when: 
+    - calico_cr.rc != 0
+    - '"already exists" not in calico_cr.stderr'
+
+- name: Wait for Calico pods to be ready in tigera-operator namespace
+  command: kubectl wait --for=condition=ready pod --all -n tigera-operator --timeout=300s
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  retries: 5
+  delay: 15
+  register: calico_operator_ready
+  until: calico_operator_ready.rc == 0
+
+- name: Wait for Calico pods to be ready in calico-system namespace
+  command: kubectl wait --for=condition=ready pod --all -n calico-system --timeout=600s
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  retries: 10
+  delay: 30
+  register: calico_system_ready
+  until: calico_system_ready.rc == 0
+
+- name: Wait for Calico API server to be ready (if installed)
+  command: kubectl wait --for=condition=ready pod --all -n calico-apiserver --timeout=300s
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  retries: 5
+  delay: 20
+  register: calico_api_ready
+  until: calico_api_ready.rc == 0
+  ignore_errors: yes
+
+- name: Verify Calico installation
+  command: kubectl get pods -n calico-system
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: calico_pods
+  changed_when: false
+
+- name: Display Calico pods status
+  debug:
+    var: calico_pods.stdout_lines
+
+- name: Remove temporary Calico manifests
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/tigera-operator.yaml
+    - /tmp/custom-resources.yaml

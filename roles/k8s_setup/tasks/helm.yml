@@ -1,0 +1,54 @@
+---
+- name: Check if Helm is already installed
+  command: helm version --short
+  register: helm_installed
+  failed_when: false
+  changed_when: false
+
+- name: Install Helm
+  block:
+    - name: Download Helm installation script
+      get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get_helm.sh
+        mode: '0700'
+
+    - name: Install Helm 3
+      command: /tmp/get_helm.sh
+      environment:
+        HELM_INSTALL_DIR: "{{ helm_install_dir }}"
+        DESIRED_VERSION: "v{{ helm_version }}"
+
+    - name: Remove Helm installation script
+      file:
+        path: /tmp/get_helm.sh
+        state: absent
+  when: helm_installed.rc != 0
+
+- name: Add stable Helm repository
+  command: helm repo add stable https://charts.helm.sh/stable
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  ignore_errors: yes
+
+- name: Update Helm repositories
+  command: helm repo update
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+- name: Install Tiller (Helm 2 compatibility)
+  block:
+    - name: Create Tiller service account
+      command: |
+        kubectl create serviceaccount tiller -n {{ tiller_namespace }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      ignore_errors: yes
+
+    - name: Create Tiller cluster role binding
+      command: |
+        kubectl create clusterrolebinding tiller --clusterrole=cluster-admin --serviceaccount={{ tiller_namespace }}:tiller
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      ignore_errors: yes
+  when: install_tiller | bool

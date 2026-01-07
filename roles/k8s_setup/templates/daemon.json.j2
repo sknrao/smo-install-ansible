@@ -1,0 +1,13 @@
+{
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "{{ docker_log_max_size }}",
+    "max-file": "{{ docker_log_max_file }}"
+  },
+  "data-root": "{{ docker_data_root }}",
+  "storage-driver": "{{ docker_storage_driver }}"
+{% if docker_registry.enabled and docker_registry.insecure %}
+  ,"insecure-registries": ["{{ docker_registry.host }}:{{ docker_registry.port }}"]
+{% endif %}
+}

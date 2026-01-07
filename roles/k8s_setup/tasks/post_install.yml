@@ -1,0 +1,105 @@
+---
+- name: Configure kubectl for target user
+  block:
+    - name: Create .kube directory for user
+      file:
+        path: "/home/{{ target_user }}/.kube"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0755'
+
+    - name: Copy admin.conf to user .kube/config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/home/{{ target_user }}/.kube/config"
+        remote_src: yes
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0600'
+
+    - name: Set KUBECONFIG environment variable
+      lineinfile:
+        path: "/home/{{ target_user }}/.bashrc"
+        line: 'export KUBECONFIG=$HOME/.kube/config'
+        state: present
+  when: configure_kubectl_for_user | bool
+
+- name: Wait for all system pods to be ready
+  command: kubectl wait --for=condition=ready pod --all -n kube-system --timeout=600s
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  retries: 3
+  delay: 20
+  register: pods_ready
+  until: pods_ready.rc == 0
+
+- name: Get cluster info
+  command: kubectl cluster-info
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: cluster_info
+  changed_when: false
+
+- name: Display cluster information
+  debug:
+    var: cluster_info.stdout_lines
+
+- name: Get all pods status
+  command: kubectl get pods --all-namespaces
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: all_pods
+  changed_when: false
+
+- name: Display pods status
+  debug:
+    var: all_pods.stdout_lines
+
+- name: Setup NFS provisioner for persistent storage
+  block:
+    - name: Create namespace for NFS provisioner
+      command: kubectl create namespace {{ nfs_provisioner_namespace }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      ignore_errors: yes
+
+    - name: Add NFS provisioner Helm repo
+      command: helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Install NFS server provisioner
+      command: |
+        helm install nfs-release-1 nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+          --namespace {{ nfs_provisioner_namespace }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Set NFS storage class as default
+      command: |
+        kubectl patch storageclass nfs-client \
+          -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      ignore_errors: yes
+  when: setup_nfs_provisioner | bool
+
+- name: Create completion message file
+  copy:
+    dest: /root/k8s-setup-complete.txt
+    content: |
+      Kubernetes Cluster Setup Complete!
+      
+      Cluster Info:
+      {{ cluster_info.stdout }}
+      
+      To access the cluster as regular user, run:
+        mkdir -p $HOME/.kube
+        sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        sudo chown $(id -u):$(id -g) $HOME/.kube/config
+      
+      Get cluster status:
+        kubectl get nodes
+        kubectl get pods --all-namespaces
+    mode: '0644'

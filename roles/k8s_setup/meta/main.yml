@@ -1,0 +1,28 @@
+---
+galaxy_info:
+  author: Your Name
+  description: Setup single-node Kubernetes cluster for O-RAN SC deployments
+  company: Your Company
+  license: Apache-2.0
+  min_ansible_version: "2.10"
+  
+  platforms:
+    - name: Ubuntu
+      versions:
+        - bionic
+        - focal
+        - jammy
+    - name: EL
+      versions:
+        - 7
+        - 8
+
+  galaxy_tags:
+    - kubernetes
+    - k8s
+    - docker
+    - helm
+    - o-ran
+    - oran
+
+dependencies: []

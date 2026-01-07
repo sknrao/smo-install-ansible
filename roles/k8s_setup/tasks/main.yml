@@ -1,0 +1,31 @@
+---
+- name: Include prerequisites tasks
+  include_tasks: prerequisites.yml
+  tags:
+    - prerequisites
+
+- name: Include Docker installation tasks
+  include_tasks: docker.yml
+  tags:
+    - docker
+
+- name: Include Kubernetes installation tasks
+  include_tasks: kubernetes.yml
+  tags:
+    - kubernetes
+
+- name: Include Calico CNI tasks
+  include_tasks: calico.yml
+  tags:
+    - cni
+    - calico
+
+- name: Include Helm installation tasks
+  include_tasks: helm.yml
+  tags:
+    - helm
+
+- name: Include post-installation tasks
+  include_tasks: post_install.yml
+  tags:
+    - post-install

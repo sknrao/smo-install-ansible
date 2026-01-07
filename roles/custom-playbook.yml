@@ -1,0 +1,27 @@
+---
+- name: Setup Kubernetes Cluster with Custom Settings
+  hosts: k8s_master
+  become: yes
+  vars:
+    k8s_version: "1.28.0"
+    helm_version: "3.12.0"
+    k8s_node_name: "oran-k8s-master"
+    setup_nfs_provisioner: true
+    target_user: "ubuntu"
+    
+    # Private registry configuration
+    docker_registry:
+      enabled: true
+      host: "myregistry.local"
+      port: 5000
+      username: "admin"
+      password: "secret"
+      insecure: true
+    
+    # Custom hosts
+    custom_hosts:
+      - ip: "192.168.1.100"
+        hostname: "myregistry.local"
+  
+  roles:
+    - role: k8s_setup

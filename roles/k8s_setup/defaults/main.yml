@@ -1,0 +1,55 @@
+---
+# Kubernetes version configuration
+k8s_version: "1.28.0"  # Can be left empty for default OS version
+k8s_cni_version: ""    # CNI version (empty for default)
+docker_version: ""     # Docker version (empty for default)
+helm_version: "3.12.0"
+
+# Network configuration
+k8s_pod_network_cidr: "10.244.0.0/16"
+k8s_service_cidr: "10.96.0.0/12"
+
+# Node configuration
+k8s_node_name: "{{ ansible_hostname }}"
+k8s_disable_swap: true
+
+# Docker configuration
+docker_data_root: "/var/lib/docker"
+docker_log_max_size: "10m"
+docker_log_max_file: "3"
+docker_storage_driver: "overlay2"
+
+# Helm configuration
+helm_install_dir: "/usr/local/bin"
+
+# Private registry configuration (optional)
+docker_registry:
+  enabled: false
+  host: ""
+  port: 5000
+  username: ""
+  password: ""
+  insecure: true
+
+# Custom /etc/hosts entries (optional)
+custom_hosts: []
+  # - ip: "192.168.1.100"
+  #   hostname: "myregistry.local"
+
+# Calico CNI
+calico_version: "v3.28.2"
+calico_backend_type: "bird"  # or "vxlan" for encapsulation
+calico_ipv4_pool_ipip: "Always"  # Options: Always, CrossSubnet, Never
+calico_nat_outgoing: true
+
+# Tiller (for Helm 2 compatibility if needed)
+install_tiller: false
+tiller_namespace: "kube-system"
+
+# Post-installation options
+configure_kubectl_for_user: true
+target_user: "{{ ansible_user }}"
+
+# Storage class for persistent volumes
+setup_nfs_provisioner: false
+nfs_provisioner_namespace: "kube-system"

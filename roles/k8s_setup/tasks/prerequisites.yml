@@ -1,0 +1,98 @@
+---
+- name: Gather facts
+  setup:
+
+- name: Check if running on supported OS
+  assert:
+    that:
+      - ansible_distribution in ['Ubuntu', 'CentOS', 'RedHat']
+      - (ansible_distribution == 'Ubuntu' and ansible_distribution_version is version('18.04', '>=')) or
+        (ansible_distribution in ['CentOS', 'RedHat'] and ansible_distribution_major_version|int >= 7)
+    fail_msg: "Unsupported OS. This role supports Ubuntu 18.04+, CentOS/RHEL 7+"
+
+- name: Disable swap permanently
+  block:
+    - name: Disable swap
+      command: swapoff -a
+      when: k8s_disable_swap | bool
+
+    - name: Remove swap from /etc/fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^\s*([^#\s]+\s+){2}swap\s'
+        state: absent
+      when: k8s_disable_swap | bool
+  tags:
+    - swap
+
+- name: Set hostname
+  hostname:
+    name: "{{ k8s_node_name }}"
+  when: k8s_node_name != ansible_hostname
+
+- name: Update /etc/hosts with custom entries
+  lineinfile:
+    path: /etc/hosts
+    line: "{{ item.ip }} {{ item.hostname }}"
+    state: present
+  loop: "{{ custom_hosts }}"
+  when: custom_hosts | length > 0
+
+- name: Install prerequisite packages (Ubuntu/Debian)
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - software-properties-common
+      - wget
+      - nfs-common
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install prerequisite packages (RedHat/CentOS)
+  yum:
+    name:
+      - yum-utils
+      - device-mapper-persistent-data
+      - lvm2
+      - curl
+      - wget
+      - nfs-utils
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Disable SELinux (RedHat/CentOS)
+  selinux:
+    state: disabled
+  when: ansible_os_family == "RedHat"
+
+- name: Load kernel modules
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+
+- name: Make kernel modules persistent
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+    mode: '0644'
+
+- name: Set sysctl parameters for Kubernetes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/k8s.conf
+    reload: yes
+  loop:
+    - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+    - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+    - { name: 'net.ipv4.ip_forward', value: '1' }

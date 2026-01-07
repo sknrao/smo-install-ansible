@@ -1,0 +1,16 @@
+---
+# Internal variables (not meant to be overridden)
+k8s_packages:
+  - kubelet
+  - kubeadm
+  - kubectl
+
+docker_packages_debian:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+
+docker_packages_redhat:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io

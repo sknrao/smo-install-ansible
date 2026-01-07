@@ -1,0 +1,106 @@
+---
+- name: Add Kubernetes GPG key (Ubuntu/Debian)
+  apt_key:
+    url: https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Add Kubernetes repository (Ubuntu/Debian)
+  apt_repository:
+    repo: "deb https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
+    state: present
+    filename: kubernetes
+  when: ansible_os_family == "Debian"
+
+- name: Add Kubernetes repository (RedHat/CentOS)
+  yum_repository:
+    name: kubernetes
+    description: Kubernetes Repository
+    baseurl: https://pkgs.k8s.io/core:/stable:/v1.28/rpm/
+    gpgcheck: yes
+    gpgkey: https://pkgs.k8s.io/core:/stable:/v1.28/rpm/repodata/repomd.xml.key
+  when: ansible_os_family == "RedHat"
+
+- name: Install Kubernetes packages (Ubuntu/Debian)
+  apt:
+    name:
+      - "kubelet{% if k8s_version != '' %}={{ k8s_version }}-*{% endif %}"
+      - "kubeadm{% if k8s_version != '' %}={{ k8s_version }}-*{% endif %}"
+      - "kubectl{% if k8s_version != '' %}={{ k8s_version }}-*{% endif %}"
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install Kubernetes packages (RedHat/CentOS)
+  yum:
+    name:
+      - "kubelet{% if k8s_version != '' %}-{{ k8s_version }}{% endif %}"
+      - "kubeadm{% if k8s_version != '' %}-{{ k8s_version }}{% endif %}"
+      - "kubectl{% if k8s_version != '' %}-{{ k8s_version }}{% endif %}"
+    state: present
+    disable_excludes: kubernetes
+  when: ansible_os_family == "RedHat"
+
+- name: Hold Kubernetes packages at current version (Ubuntu/Debian)
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+  when: ansible_os_family == "Debian"
+
+- name: Start and enable kubelet
+  systemd:
+    name: kubelet
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Check if Kubernetes is already initialized
+  stat:
+    path: /etc/kubernetes/admin.conf
+  register: k8s_initialized
+
+- name: Initialize Kubernetes cluster
+  block:
+    - name: Create kubeadm config file
+      template:
+        src: kubeadm-config.yaml.j2
+        dest: /tmp/kubeadm-config.yaml
+        mode: '0644'
+
+    - name: Initialize cluster with kubeadm
+      command: kubeadm init --config /tmp/kubeadm-config.yaml
+      register: kubeadm_init
+
+    - name: Save kubeadm init output
+      copy:
+        content: "{{ kubeadm_init.stdout }}"
+        dest: /root/kubeadm-init.log
+        mode: '0600'
+
+    - name: Remove temporary kubeadm config
+      file:
+        path: /tmp/kubeadm-config.yaml
+        state: absent
+  when: not k8s_initialized.stat.exists
+
+- name: Create .kube directory for root
+  file:
+    path: /root/.kube
+    state: directory
+    mode: '0755'
+
+- name: Copy admin.conf to root .kube/config
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /root/.kube/config
+    remote_src: yes
+    mode: '0600'
+
+- name: Remove master taint to allow pod scheduling on master node
+  command: kubectl taint nodes --all node-role.kubernetes.io/control-plane- node-role.kubernetes.io/master-
+  ignore_errors: yes
+  when: not k8s_initialized.stat.exists
