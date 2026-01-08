@@ -10,11 +10,80 @@
         mode: '0755'
       tags: install
 
+    - name: Install yq if not present (required for post-renderer)
+      block:
+        - name: Check if yq is installed
+          command: which yq
+          register: yq_check
+          failed_when: false
+          changed_when: false
+
+        - name: Download and install yq
+          shell: |
+            YQ_VERSION="v4.35.1"
+            wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+            chmod +x /usr/local/bin/yq
+          when: yq_check.rc != 0
+
+        - name: Verify yq installation
+          command: yq --version
+          register: yq_version
+          changed_when: false
+
+        - name: Display yq version
+          debug:
+            msg: "yq installed: {{ yq_version.stdout }}"
+
+      tags: install
+
     - name: Copy post-renderer script
       copy:
         src: helm-post-renderer.sh
         dest: "{{ post_renderer_script }}"
         mode: '0755'
+      tags: install
+
+    - name: Read image mappings from external file
+      block:
+        - name: Check if external mappings file exists
+          stat:
+            path: "{{ image_mappings_file }}"
+          register: mappings_file_stat
+
+        - name: Fail if file specified but doesn't exist
+          fail:
+            msg: "Image mappings file specified but not found: {{ image_mappings_file }}"
+          when: not mappings_file_stat.stat.exists
+
+        - name: Read mappings from file
+          slurp:
+            src: "{{ image_mappings_file }}"
+          register: mappings_content
+          when: mappings_file_stat.stat.exists
+
+        - name: Parse mappings from file
+          set_fact:
+            file_based_mappings: "{{ (mappings_content.content | b64decode).split('\n') | select('match', '^[^#].*') | select() | list }}"
+          when: mappings_file_stat.stat.exists
+
+        - name: Display file-based mappings count
+          debug:
+            msg: "Loaded {{ file_based_mappings | length }} mappings from file: {{ image_mappings_file }}"
+          when: mappings_file_stat.stat.exists
+
+      when: image_mappings_file != ""
+      tags: install
+
+    - name: Combine inline and file-based mappings
+      set_fact:
+        effective_image_mappings: "{{ image_tag_mappings + (file_based_mappings | default([])) }}"
+      when: image_mappings_file != ""
+      tags: install
+
+    - name: Use inline mappings only
+      set_fact:
+        effective_image_mappings: "{{ image_tag_mappings }}"
+      when: image_mappings_file == ""
       tags: install
 
     - name: Generate post-renderer configuration
@@ -24,13 +93,19 @@
         mode: '0644'
       tags: install
 
-    - name: Display post-renderer configuration
+    - name: Display post-renderer configuration summary
       debug:
         msg:
-          - "Post-renderer enabled"
+          - "=========================================="
+          - "Post-Renderer Configuration"
+          - "=========================================="
           - "Script: {{ post_renderer_script }}"
           - "Config: {{ post_renderer_config }}"
-          - "Image tag mappings: {{ image_tag_mappings | length }} mappings"
+          - "Total mappings: {{ effective_image_mappings | default([]) | length }}"
+          - "  - Inline mappings: {{ image_tag_mappings | length }}"
+          - "  - File mappings: {{ file_based_mappings | default([]) | length }}"
+          - "Using yq: {{ yq_version.stdout | default('not available') }}"
+          - "=========================================="
       tags: install
 
   when: enable_post_renderer
@@ -64,6 +139,7 @@
       - "ONAP Override: {{ effective_onap_override }}"
       - "Non-RT RIC Override: {{ effective_nonrtric_override }}"
       - "Using ChartMuseum: {{ use_chartmuseum }}"
+      - "Post-Renderer: {{ enable_post_renderer }}"
   tags: install
 
 - name: Warn if override files are missing
@@ -77,7 +153,7 @@
 
 - name: Check if SMO is already deployed
   shell: |
-    microk8s kubectl get deployment -n {{ onap_namespace }} | grep -i onap || true
+    {{ kubectl_command }} get deployment -n {{ onap_namespace }} | grep -i onap || true
   register: smo_deployed
   changed_when: false
   tags: install
@@ -93,7 +169,7 @@
 
     - name: Wait for pods to terminate
       shell: |
-        microk8s kubectl wait --for=delete pods --all -n {{ onap_namespace }} --timeout=600s || true
+        {{ kubectl_command }} wait --for=delete pods --all -n {{ onap_namespace }} --timeout=600s || true
       tags: install
 
   when: force_reinstall and smo_deployed.stdout != ""
@@ -170,7 +246,7 @@
 
     - name: Wait for ONAP and Non-RT RIC to be ready before deploying simulators
       shell: |
-        microk8s kubectl wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout={{ pod_ready_timeout }}s
+        {{ kubectl_command }} wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout={{ pod_ready_timeout }}s
       retries: 2
       delay: 30
       tags: install
@@ -207,7 +283,7 @@
 
 - name: Wait for all pods to be ready
   shell: |
-    microk8s kubectl wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout={{ pod_ready_timeout }}s
+    {{ kubectl_command }} wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout={{ pod_ready_timeout }}s
   register: pods_ready
   retries: 3
   delay: 60
@@ -217,7 +293,7 @@
 
 - name: Get all pods status
   shell: |
-    microk8s kubectl get pods -n {{ onap_namespace }}
+    {{ kubectl_command }} get pods -n {{ onap_namespace }}
   register: pods_status
   changed_when: false
   tags: install
@@ -229,7 +305,7 @@
 
 - name: Get all services
   shell: |
-    microk8s kubectl get services -n {{ onap_namespace }}
+    {{ kubectl_command }} get services -n {{ onap_namespace }}
   register: services_status
   changed_when: false
   tags: install
@@ -248,7 +324,7 @@
 
     - name: Delete namespace
       shell: |
-        microk8s kubectl delete namespace {{ onap_namespace }} --grace-period=0 --force || true
+        {{ kubectl_command }} delete namespace {{ onap_namespace }} --grace-period=0 --force || true
       tags: install
 
   when: cleanup_on_failure and (onap_install.failed | default(false) or nonrtric_install.failed | default(false))

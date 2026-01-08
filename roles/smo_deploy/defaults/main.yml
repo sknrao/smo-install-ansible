@@ -2,9 +2,19 @@
 # Default variables for SMO deployment
 
 # Cluster Configuration
-cluster_type: "microk8s"  # Options: microk8s, k8s
+cluster_type: "existing"  # Options: existing, microk8s (use "existing" for pre-deployed cluster)
+#cluster_type: "microk8s"  # Options: microk8s, k8s
 microk8s_version: "1.28"
 k8s_namespace: "onap"
+kubectl_command: "kubectl"  # For existing cluster, use "kubectl". For microk8s, use "microk8s kubectl"
+
+# Storage Configuration (for existing cluster)
+storage_class: ""  # Leave empty for default, or specify: "nfs-client", "local-path", "longhorn", etc.
+
+# Container Runtime Configuration (for existing cluster)
+# Options: "containerd", "docker", "cri-o"
+container_runtime: "containerd"
+ctr_command: "crictl"  # For containerd: "crictl", for docker: "docker"
 
 # Image Pre-pull Configuration
 prepull_images: true

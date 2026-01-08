@@ -1,0 +1,105 @@
+# SMO Image Mappings Configuration
+# Format: old_image:old_tag -> new_image:new_tag
+# Lines starting with # are comments
+
+# ============================================
+# ONAP Components - Registry Migration
+# ============================================
+# Move all ONAP images from Nexus to Harbor
+nexus3.onap.org:10001/* -> harbor.company.com/onap/*
+
+# ============================================
+# ONAP AAI Components
+# ============================================
+nexus3.onap.org:10001/onap/aai-resources:1.12.3 -> harbor.company.com/onap/aai-resources:1.12.3
+nexus3.onap.org:10001/onap/aai-traversal:1.12.3 -> harbor.company.com/onap/aai-traversal:1.12.3
+nexus3.onap.org:10001/onap/aai-graphadmin:1.12.3 -> harbor.company.com/onap/aai-graphadmin:1.12.3
+nexus3.onap.org:10001/onap/aai-schema-service:1.11.0 -> harbor.company.com/onap/aai-schema-service:1.11.0
+
+# ============================================
+# ONAP SDC Components
+# ============================================
+nexus3.onap.org:10001/onap/sdc-frontend:1.12.0 -> harbor.company.com/onap/sdc-frontend:1.12.0
+nexus3.onap.org:10001/onap/sdc-backend-all-plugins:1.12.0 -> harbor.company.com/onap/sdc-backend-all-plugins:1.12.0
+nexus3.onap.org:10001/onap/sdc-backend-init:1.12.0 -> harbor.company.com/onap/sdc-backend-init:1.12.0
+nexus3.onap.org:10001/onap/sdc-cassandra-init:1.12.0 -> harbor.company.com/onap/sdc-cassandra-init:1.12.0
+nexus3.onap.org:10001/onap/sdc-onboard-backend:1.12.0 -> harbor.company.com/onap/sdc-onboard-backend:1.12.0
+
+# ============================================
+# ONAP SDNC Components
+# ============================================
+nexus3.onap.org:10001/onap/sdnc-image:2.5.1 -> harbor.company.com/onap/sdnc-image:2.5.1
+nexus3.onap.org:10001/onap/sdnc-ansible-server-image:2.5.1 -> harbor.company.com/onap/sdnc-ansible-server-image:2.5.1
+nexus3.onap.org:10001/onap/sdnc-dmaap-listener-image:2.5.1 -> harbor.company.com/onap/sdnc-dmaap-listener-image:2.5.1
+nexus3.onap.org:10001/onap/sdnc-ueb-listener-image:2.5.1 -> harbor.company.com/onap/sdnc-ueb-listener-image:2.5.1
+
+# ============================================
+# ONAP Policy Components
+# ============================================
+nexus3.onap.org:10001/onap/policy-api:2.8.2 -> harbor.company.com/onap/policy-api:2.8.2
+nexus3.onap.org:10001/onap/policy-pap:2.8.2 -> harbor.company.com/onap/policy-pap:2.8.2
+nexus3.onap.org:10001/onap/policy-apex-pdp:2.8.2 -> harbor.company.com/onap/policy-apex-pdp:2.8.2
+nexus3.onap.org:10001/onap/policy-xacml-pdp:2.8.2 -> harbor.company.com/onap/policy-xacml-pdp:2.8.2
+nexus3.onap.org:10001/onap/policy-drools-pdp:2.1.2 -> harbor.company.com/onap/policy-drools-pdp:2.1.2
+nexus3.onap.org:10001/onap/policy-distribution:2.8.1 -> harbor.company.com/onap/policy-distribution:2.8.1
+
+# ============================================
+# ONAP CDS Components
+# ============================================
+nexus3.onap.org:10001/onap/ccsdk-blueprintsprocessor:1.4.2 -> harbor.company.com/onap/ccsdk-blueprintsprocessor:1.4.2
+nexus3.onap.org:10001/onap/ccsdk-commandexecutor:1.4.2 -> harbor.company.com/onap/ccsdk-commandexecutor:1.4.2
+nexus3.onap.org:10001/onap/ccsdk-py-executor:1.4.2 -> harbor.company.com/onap/ccsdk-py-executor:1.4.2
+nexus3.onap.org:10001/onap/ccsdk-cds-ui-server:1.4.2 -> harbor.company.com/onap/ccsdk-cds-ui-server:1.4.2
+
+# ============================================
+# ONAP Portal Components
+# ============================================
+nexus3.onap.org:10001/onap/portal-app:3.4.3 -> harbor.company.com/onap/portal-app:3.4.3
+nexus3.onap.org:10001/onap/portal-db:3.4.3 -> harbor.company.com/onap/portal-db:3.4.3
+nexus3.onap.org:10001/onap/portal-wms:3.4.3 -> harbor.company.com/onap/portal-wms:3.4.3
+
+# ============================================
+# ONAP DMaaP Components
+# ============================================
+nexus3.onap.org:10001/onap/dmaap/dmaap-mr:1.4.3 -> harbor.company.com/onap/dmaap/dmaap-mr:1.4.3
+nexus3.onap.org:10001/onap/dmaap/kafka111:1.1.1 -> harbor.company.com/onap/dmaap/kafka111:1.1.1
+nexus3.onap.org:10001/onap/dmaap/zookeeper:6.1.0 -> harbor.company.com/onap/dmaap/zookeeper:6.1.0
+
+# ============================================
+# O-RAN SC Non-RT RIC Components
+# ============================================
+o-ran-sc/nonrtric-plt-a1policymanagementservice:1.2.3 -> harbor.company.com/oran/nonrtric-plt-a1policymanagementservice:1.2.3
+o-ran-sc/nonrtric-plt-informationcoordinatorservice:1.2.3 -> harbor.company.com/oran/nonrtric-plt-informationcoordinatorservice:1.2.3
+o-ran-sc/nonrtric-plt-rappcatalogueservice:1.2.3 -> harbor.company.com/oran/nonrtric-plt-rappcatalogueservice:1.2.3
+o-ran-sc/nonrtric-gateway:1.2.3 -> harbor.company.com/oran/nonrtric-gateway:1.2.3
+o-ran-sc/nonrtric-controlpanel:2.4.0 -> harbor.company.com/oran/nonrtric-controlpanel:2.4.0
+
+# ============================================
+# O-RAN A1 Simulator
+# ============================================
+o-ran-sc/a1-simulator:latest -> harbor.company.com/oran/a1-simulator:2.6.0
+
+# ============================================
+# Third-Party Dependencies
+# ============================================
+# Databases
+docker.io/library/mariadb:10.6 -> harbor.company.com/library/mariadb:10.6
+docker.io/library/postgres:13 -> harbor.company.com/library/postgres:13
+docker.io/cassandra:3.11.12 -> harbor.company.com/library/cassandra:3.11.12
+
+# Message Queue
+docker.io/confluentinc/cp-kafka:7.2.1 -> harbor.company.com/confluent/cp-kafka:7.2.1
+docker.io/confluentinc/cp-zookeeper:7.2.1 -> harbor.company.com/confluent/cp-zookeeper:7.2.1
+
+# Utilities
+docker.io/library/busybox:1.32 -> harbor.company.com/library/busybox:1.32
+docker.io/library/nginx:1.21 -> harbor.company.com/library/nginx:1.21
+
+# ============================================
+# Global Tag Replacements (use carefully)
+# ============================================
+# Replace all 'latest' tags with 'stable'
+# *:latest -> stable
+
+# Replace all 'snapshot' tags with specific version
+# *:snapshot -> 2.8.0-stable

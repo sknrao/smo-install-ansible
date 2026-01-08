@@ -1,0 +1,126 @@
+---
+# Kubernetes cluster configuration tasks (for existing cluster)
+
+- name: Clone or update it-dep repository
+  git:
+    repo: "{{ it_dep_repo }}"
+    dest: "{{ it_dep_dir }}"
+    version: "{{ it_dep_branch }}"
+    force: yes
+  tags: cluster
+
+- name: Check if kubectl is available
+  command: kubectl version --client
+  register: kubectl_check
+  failed_when: false
+  changed_when: false
+  tags: cluster
+
+- name: Fail if kubectl is not available
+  fail:
+    msg: "kubectl is not installed or not in PATH. Please ensure Kubernetes cluster is set up."
+  when: kubectl_check.rc != 0
+  tags: cluster
+
+- name: Check cluster connectivity
+  command: kubectl cluster-info
+  register: cluster_info
+  failed_when: false
+  changed_when: false
+  tags: cluster
+
+- name: Fail if cannot connect to cluster
+  fail:
+    msg: "Cannot connect to Kubernetes cluster. Please check kubeconfig and cluster status."
+  when: cluster_info.rc != 0
+  tags: cluster
+
+- name: Display cluster information
+  debug:
+    var: cluster_info.stdout_lines
+  tags: cluster
+
+- name: Check if user has cluster-admin privileges
+  command: kubectl auth can-i '*' '*' --all-namespaces
+  register: admin_check
+  failed_when: false
+  changed_when: false
+  tags: cluster
+
+- name: Warn if not cluster-admin
+  debug:
+    msg: "WARNING: Current user may not have cluster-admin privileges. Some operations may fail."
+  when: admin_check.stdout != "yes"
+  tags: cluster
+
+- name: Wait for all system pods to be ready
+  shell: |
+    kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=600s
+  register: pods_ready
+  retries: 5
+  delay: 30
+  until: pods_ready.rc == 0
+  tags: cluster
+
+- name: Check if ONAP namespace exists
+  command: kubectl get namespace {{ onap_namespace }}
+  register: ns_check
+  failed_when: false
+  changed_when: false
+  tags: cluster
+
+- name: Create ONAP namespace
+  command: kubectl create namespace {{ onap_namespace }}
+  when: ns_check.rc != 0
+  register: ns_result
+  changed_when: ns_result.rc == 0
+  tags: cluster
+
+- name: Check if storage class is available
+  shell: |
+    kubectl get storageclass | grep -v "NAME" | head -1 | awk '{print $1}'
+  register: storage_class_check
+  changed_when: false
+  tags: cluster
+
+- name: Display available storage class
+  debug:
+    msg: "Available storage class: {{ storage_class_check.stdout }}"
+  when: storage_class_check.stdout != ""
+  tags: cluster
+
+- name: Warn if no storage class available
+  debug:
+    msg: "WARNING: No storage class found. Deployments requiring persistent volumes may fail."
+  when: storage_class_check.stdout == ""
+  tags: cluster
+
+- name: Get cluster nodes
+  command: kubectl get nodes
+  register: nodes_status
+  changed_when: false
+  tags: cluster
+
+- name: Show cluster nodes
+  debug:
+    var: nodes_status.stdout_lines
+  tags: cluster
+
+- name: Verify DNS is working
+  shell: |
+    kubectl run test-dns --image=busybox:1.28 --rm -it --restart=Never -- nslookup kubernetes.default || true
+  register: dns_test
+  changed_when: false
+  failed_when: false
+  tags: cluster
+
+- name: Display cluster readiness summary
+  debug:
+    msg:
+      - "Cluster Readiness Check:"
+      - "Kubectl: {{ 'OK' if kubectl_check.rc == 0 else 'FAIL' }}"
+      - "Cluster connectivity: {{ 'OK' if cluster_info.rc == 0 else 'FAIL' }}"
+      - "Admin privileges: {{ 'OK' if admin_check.stdout == 'yes' else 'LIMITED' }}"
+      - "Storage class: {{ storage_class_check.stdout if storage_class_check.stdout != '' else 'NONE' }}"
+      - "Namespace {{ onap_namespace }}: {{ 'EXISTS' if ns_check.rc == 0 else 'CREATED' }}"
+  tags: cluster
