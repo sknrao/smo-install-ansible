@@ -311,6 +311,84 @@
     - install
     - simulators
 
+- name: Ensure SMO namespace exists
+  command: kubectl create namespace smo
+  register: smo_ns
+  failed_when:
+    - smo_ns.rc != 0
+    - "'AlreadyExists' not in smo_ns.stderr"
+  changed_when:
+    - "'created' in smo_ns.stdout"
+
+- name: Install ORAN SMO via Helm
+  command: >
+    helm upgrade --install oran-smo
+    oran-snapshot/smo
+    --namespace smo
+    -f {{ nonrtric_override_file }}
+    --timeout 15m
+
+- name: Get number of SMO secrets defined in override YAML
+  command: >
+    yq '.smo.secrets | length' {{ overrideyaml }}
+  register: smo_secrets_size
+  changed_when: false
+  failed_when: smo_secrets_size.rc != 0
+
+- name: Exit early if no secrets to copy
+  meta: end_play
+  when: smo_secrets_size.stdout | int == 0
+
+- name: Build SMO secrets list
+  set_fact:
+    smo_secrets_indexes: "{{ range(0, smo_secrets_size.stdout | int) | list }}"
+
+- name: Process SMO secrets
+  block:
+
+    - name: Read secret name
+      command: >
+        yq '.smo.secrets[{{ item }}].name' {{ overrideyaml }}
+      register: secret_name
+      changed_when: false
+
+    - name: Read dependsOn field
+      command: >
+        yq '.smo.secrets[{{ item }}].dependsOn' {{ overrideyaml }}
+      register: depends_on
+      changed_when: false
+
+    - name: Check dependsOn value
+      command: >
+        yq '.{{ depends_on.stdout }}' {{ overrideyaml }}
+      register: depends_on_value
+      changed_when: false
+
+    - name: Skip secret copy if dependsOn is not true
+      debug:
+        msg: "{{ depends_on.stdout }} is not set to true. Skipping {{ secret_name.stdout }} copy..."
+      when: depends_on_value.stdout != "true"
+
+    - name: Wait for secret to exist in onap namespace
+      command: kubectl get secret {{ secret_name.stdout }} -n onap
+      register: secret_check
+      retries: 60
+      delay: 10
+      until: secret_check.rc == 0
+      when: depends_on_value.stdout == "true"
+
+    - name: Copy secret from onap to smo namespace
+      shell: |
+        kubectl get secret {{ secret_name.stdout }} -n onap -o json \
+        | jq 'del(.metadata["namespace","creationTimestamp","resourceVersion","selfLink","uid","ownerReferences"])' \
+        | kubectl apply -n smo -f -
+      when: depends_on_value.stdout == "true"
+
+  loop: "{{ smo_secrets_indexes }}"
+  loop_control:
+    label: "{{ item }}"
+
+
 - name: Wait for all pods to be ready
   shell: |
     {{ kubectl_command }} wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout={{ pod_ready_timeout }}s
