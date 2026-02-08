@@ -1,17 +1,17 @@
 ---
 - name: Deploy O-RAN SMO
-  hosts: smo_servers
+  hosts: all
   become: yes
   gather_facts: yes
   
   vars:
     # Override default variables here
-    external_ip: "192.168.1.100"  # Change to your server IP
+    external_ip: "10.200.105.55"  # Change to your server IP
     onap_namespace: "onap"
     
     # Deployment configuration
     deployment_flavor: "default"  # Options: default, small, medium, large, cnf
-    deployment_mode: "release"     # Options: release, snapshot, latest
+    deployment_mode: "snapshot"     # Options: release, snapshot, latest
     
     # Component selection
     deploy_onap: true
@@ -19,7 +19,7 @@
     deploy_oran_components: true
     
     # Image pre-pull
-    prepull_images: true
+    prepull_images: false
     
     # ChartMuseum (set to false for upstream repos - recommended)
     use_chartmuseum: false

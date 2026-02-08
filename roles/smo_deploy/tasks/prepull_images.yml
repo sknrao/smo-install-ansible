@@ -1,3 +1,4 @@
+---
 # Image pre-pull tasks to avoid deployment timeouts
 
 - name: Check if generate-image-list.sh script exists
@@ -24,6 +25,7 @@
     {{ image_list_script }}
   register: image_list_generation
   changed_when: false
+  failed_when: false
   tags: prepull
 
 - name: Check if image list was created
@@ -32,23 +34,22 @@
   register: image_list_file
   tags: prepull
 
-- name: Read generated image list
-  slurp:
-    src: "{{ it_dep_dir }}/smo-install/image-list.txt"
-  register: image_list_content
-  when: image_list_file.stat.exists
-  tags: prepull
-
-- name: Parse image list
+- name: Initialize images_to_pull as empty list
   set_fact:
-    images_to_pull: "{{ (image_list_content.content | b64decode).split('\n') | select('match', '^[^#].*') | list }}"
-  when: image_list_file.stat.exists
+    images_to_pull: []
   tags: prepull
 
-- name: Display number of images to pull
-  debug:
-    msg: "Found {{ images_to_pull | length }} images to pre-pull"
-  tags: prepull
+- name: Read and parse image list
+  block:
+    - name: Read generated image list
+      slurp:
+        src: "{{ it_dep_dir }}/smo-install/image-list.txt"
+      register: image_list_content
+      tags: prepull
+
+    - name: Parse image list
+      set_fact:
+        images_to_pull: "{{ (image_list_content.content | b64decode).split('\n') | reject('match', '^\\s*
 
 - name: Create image pull directory for tracking
   file:
@@ -56,11 +57,37 @@
     state: directory
   tags: prepull
 
+- name: Detect container runtime
+  block:
+    - name: Check for crictl (containerd)
+      command: which crictl
+      register: crictl_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check for docker
+      command: which docker
+      register: docker_check
+      failed_when: false
+      changed_when: false
+
+    - name: Set container runtime command
+      set_fact:
+        detected_ctr_command: "{{ 'crictl' if crictl_check.rc == 0 else ('docker' if docker_check.rc == 0 else ctr_command) }}"
+
+  tags: prepull
+
 - name: Check already pulled images
   shell: |
-    microk8s ctr images ls -q | grep "{{ item }}" || echo "not-found"
+    {% if detected_ctr_command == 'crictl' %}
+    crictl images | grep "{{ item }}" || echo "not-found"
+    {% elif detected_ctr_command == 'docker' %}
+    docker images --format "{{ '{{' }}.Repository{{ '}}' }}:{{ '{{' }}.Tag{{ '}}' }}" | grep "{{ item }}" || echo "not-found"
+    {% else %}
+    echo "not-found"
+    {% endif %}
   register: existing_images
-  loop: "{{ images_to_pull }}"
+  loop: "{{ images_to_pull | default([]) }}"
   changed_when: false
   failed_when: false
   when: images_to_pull is defined and images_to_pull | length > 0
@@ -74,7 +101,7 @@
 
 - name: Display images to download
   debug:
-    msg: "Need to download {{ images_to_download | length }} new images"
+    msg: "Need to download {{ images_to_download | default([]) | length }} new images"
   when: images_to_download is defined
   tags: prepull
 
@@ -83,17 +110,32 @@
     image="{{ item }}"
     echo "Pulling image: $image"
     
-    # Try with microk8s first
-    if timeout {{ image_pull_timeout }} microk8s ctr images pull "$image" 2>&1; then
-      echo "Successfully pulled $image with microk8s ctr"
+    {% if detected_ctr_command == 'crictl' %}
+    # Using crictl for containerd
+    if timeout {{ image_pull_timeout }} crictl pull "$image" 2>&1; then
+      echo "Successfully pulled $image with crictl"
       echo "$image" >> /tmp/smo-image-pull/success.log
     else
       echo "Failed to pull $image" >&2
       echo "$image" >> /tmp/smo-image-pull/failed.log
       exit 1
     fi
+    {% elif detected_ctr_command == 'docker' %}
+    # Using docker
+    if timeout {{ image_pull_timeout }} docker pull "$image" 2>&1; then
+      echo "Successfully pulled $image with docker"
+      echo "$image" >> /tmp/smo-image-pull/success.log
+    else
+      echo "Failed to pull $image" >&2
+      echo "$image" >> /tmp/smo-image-pull/failed.log
+      exit 1
+    fi
+    {% else %}
+    echo "No supported container runtime found" >&2
+    exit 1
+    {% endif %}
   register: image_pull_result
-  loop: "{{ images_to_download }}"
+  loop: "{{ images_to_download | default([]) }}"
   when: images_to_download is defined and images_to_download | length > 0
   async: "{{ image_pull_timeout }}"
   poll: 0
@@ -108,7 +150,7 @@
   until: image_pull_jobs.finished
   retries: "{{ (image_pull_timeout / 10) | int }}"
   delay: 10
-  loop: "{{ image_pull_result.results }}"
+  loop: "{{ image_pull_result.results | default([]) }}"
   when: images_to_download is defined and images_to_download | length > 0
   failed_when: false
   tags: prepull
@@ -149,8 +191,9 @@
       - "=========================================="
       - "Image Pre-pull Summary"
       - "=========================================="
-      - "Total images identified: {{ images_to_pull | length }}"
-      - "Images already cached: {{ (images_to_pull | length) - (images_to_download | default([]) | length) }}"
+      - "Container runtime: {{ detected_ctr_command }}"
+      - "Total images identified: {{ images_to_pull | default([]) | length }}"
+      - "Images already cached: {{ (images_to_pull | default([]) | length) - (images_to_download | default([]) | length) }}"
       - "Images downloaded: {{ success_count.stdout }}"
       - "Failed pulls: {{ failed_images.stdout_lines | default([]) | length }}"
       - "=========================================="
@@ -158,7 +201,13 @@
 
 - name: Verify critical images are present
   shell: |
-    microk8s ctr images ls | grep -E "(onap|oran|policy|aai|sdc|sdnc)" | wc -l
+    {% if detected_ctr_command == 'crictl' %}
+    crictl images | grep -E "(onap|oran|policy|aai|sdc|sdnc)" | wc -l
+    {% elif detected_ctr_command == 'docker' %}
+    docker images | grep -E "(onap|oran|policy|aai|sdc|sdnc)" | wc -l
+    {% else %}
+    echo "0"
+    {% endif %}
   register: critical_images
   changed_when: false
   tags: prepull
@@ -175,9 +224,425 @@
       SMO Image Pre-pull Report
       =========================
       Date: {{ ansible_date_time.iso8601 }}
+      Container Runtime: {{ detected_ctr_command }}
+      
+      Total images in list: {{ images_to_pull | default([]) | length }}
+      Images already cached: {{ (images_to_pull | default([]) | length) - (images_to_download | default([]) | length) }}
+      Images successfully pulled: {{ success_count.stdout }}
+      Failed image pulls: {{ failed_images.stdout_lines | default([]) | length }}
+      
+      {% if failed_images.stdout != "" %}
+      Failed Images:
+      {{ failed_images.stdout }}
+      {% endif %}
+      
+      Critical images present: {{ critical_images.stdout }}
+    dest: "{{ it_dep_dir }}/smo-image-pull-report.txt"
+  tags: prepull
+) | reject('match', '^#.*') | list }}"
+      tags: prepull
+
+    - name: Display number of images to pull
+      debug:
+        msg: "Found {{ images_to_pull | length }} images to pre-pull"
+      tags: prepull
+
+  when: image_list_file.stat.exists
+  tags: prepull
+
+- name: Warn if no image list found
+  debug:
+    msg: "WARNING: No image list found. Skipping image pre-pull."
+  when: not image_list_file.stat.exists or images_to_pull | length == 0
+  tags: prepull
+
+- name: Skip pre-pull if no images
+  meta: end_play
+  when: images_to_pull | length == 0
+  tags: prepull
+
+- name: Create image pull directory for tracking
+  file:
+    path: /tmp/smo-image-pull
+    state: directory
+  tags: prepull
+
+- name: Detect container runtime
+  block:
+    - name: Check for crictl (containerd)
+      command: which crictl
+      register: crictl_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check for docker
+      command: which docker
+      register: docker_check
+      failed_when: false
+      changed_when: false
+
+    - name: Set container runtime command
+      set_fact:
+        detected_ctr_command: >-
+          {{ 'crictl' if crictl_check.rc == 0 else ('docker' if docker_check.rc == 0 else ctr_command) }}
+
+    - name: Display detected container runtime
+      debug:
+        msg: "Detected container runtime: {{ detected_ctr_command }}"
+
+  tags: prepull
+
+- name: Check already pulled images
+  shell: |
+    {% if detected_ctr_command == 'crictl' %}
+    crictl images | grep "{{ item }}" || echo "not-found"
+    {% elif detected_ctr_command == 'docker' %}
+    docker images --format "{{ '{{' }}.Repository{{ '}}' }}:{{ '{{' }}.Tag{{ '}}' }}" | grep "{{ item }}" || echo "not-found"
+    {% else %}
+    echo "not-found"
+    {% endif %}
+  register: existing_images
+  loop: "{{ images_to_pull }}"
+  changed_when: false
+  failed_when: false
+  when: images_to_pull | length > 0
+  tags: prepull
+
+- name: Initialize images_to_download as empty list
+  set_fact:
+    images_to_download: []
+  tags: prepull
+
+- name: Filter images that need to be pulled
+  set_fact:
+    images_to_download: "{{ images_to_pull | zip(existing_images.results | map(attribute='stdout')) | selectattr('1', 'search', 'not-found') | map(attribute='0') | list }}"
+  when: images_to_pull | length > 0 and existing_images.results is defined
+  tags: prepull
+
+- name: Display images to download
+  debug:
+    msg: "Need to download {{ images_to_download | length }} new images"
+  tags: prepull
+
+- name: Skip download if no new images
+  debug:
+    msg: "All images already cached. Skipping download."
+  when: images_to_download | length == 0
+  tags: prepull
+
+- name: Pull Docker images in parallel batches
+  shell: |
+    image="{{ item }}"
+    echo "Pulling image: $image"
+    
+    {% if detected_ctr_command == 'crictl' %}
+    # Using crictl for containerd
+    if timeout {{ image_pull_timeout }} crictl pull "$image" 2>&1; then
+      echo "Successfully pulled $image with crictl"
+      echo "$image" >> /tmp/smo-image-pull/success.log
+    else
+      echo "Failed to pull $image" >&2
+      echo "$image" >> /tmp/smo-image-pull/failed.log
+      exit 1
+    fi
+    {% elif detected_ctr_command == 'docker' %}
+    # Using docker
+    if timeout {{ image_pull_timeout }} docker pull "$image" 2>&1; then
+      echo "Successfully pulled $image with docker"
+      echo "$image" >> /tmp/smo-image-pull/success.log
+    else
+      echo "Failed to pull $image" >&2
+      echo "$image" >> /tmp/smo-image-pull/failed.log
+      exit 1
+    fi
+    {% else %}
+    echo "No supported container runtime found" >&2
+    exit 1
+    {% endif %}
+  register: image_pull_result
+  loop: "{{ images_to_download }}"
+  when: images_to_download | length > 0
+  async: "{{ image_pull_timeout }}"
+  poll: 0
+  changed_when: true
+  failed_when: false
+  tags: prepull
+
+- name: Wait for image pull tasks to complete
+  async_status:
+    jid: "{{ item.ansible_job_id }}"
+  register: image_pull_jobs
+  until: image_pull_jobs.finished
+  retries: "{{ (image_pull_timeout / 10) | int }}"
+  delay: 10
+  loop: "{{ image_pull_result.results | default([]) }}"
+  when: images_to_download | length > 0 and image_pull_result.results is defined
+  failed_when: false
+  tags: prepull
+
+- name: Check for failed image pulls
+  shell: |
+    if [ -f /tmp/smo-image-pull/failed.log ]; then
+      cat /tmp/smo-image-pull/failed.log
+    fi
+  register: failed_images
+  changed_when: false
+  failed_when: false
+  tags: prepull
+
+- name: Display failed images warning
+  debug:
+    msg: 
+      - "WARNING: The following images failed to pull:"
+      - "{{ failed_images.stdout_lines }}"
+      - "Deployment may experience delays or failures"
+  when: failed_images.stdout != ""
+  tags: prepull
+
+- name: Count successfully pulled images
+  shell: |
+    if [ -f /tmp/smo-image-pull/success.log ]; then
+      wc -l < /tmp/smo-image-pull/success.log
+    else
+      echo "0"
+    fi
+  register: success_count
+  changed_when: false
+  tags: prepull
+
+- name: Display pull summary
+  debug:
+    msg:
+      - "=========================================="
+      - "Image Pre-pull Summary"
+      - "=========================================="
+      - "Container runtime: {{ detected_ctr_command | default('unknown') }}"
+      - "Total images identified: {{ images_to_pull | length }}"
+      - "Images already cached: {{ (images_to_pull | length) - (images_to_download | length) }}"
+      - "Images downloaded: {{ success_count.stdout }}"
+      - "Failed pulls: {{ failed_images.stdout_lines | default([]) | length }}"
+      - "=========================================="
+  tags: prepull
+
+- name: Verify critical images are present
+  shell: |
+    {% if detected_ctr_command == 'crictl' %}
+    crictl images | grep -E "(onap|oran|policy|aai|sdc|sdnc)" | wc -l
+    {% elif detected_ctr_command == 'docker' %}
+    docker images | grep -E "(onap|oran|policy|aai|sdc|sdnc)" | wc -l
+    {% else %}
+    echo "0"
+    {% endif %}
+  register: critical_images
+  changed_when: false
+  tags: prepull
+
+- name: Warn if no critical images found
+  debug:
+    msg: "WARNING: No critical ONAP/O-RAN images found. Deployment may fail."
+  when: critical_images.stdout | int == 0
+  tags: prepull
+
+- name: Save image pull report
+  copy:
+    content: |
+      SMO Image Pre-pull Report
+      =========================
+      Date: {{ ansible_date_time.iso8601 }}
+      Container Runtime: {{ detected_ctr_command | default('unknown') }}
       
       Total images in list: {{ images_to_pull | length }}
-      Images already cached: {{ (images_to_pull | length) - (images_to_download | default([]) | length) }}
+      Images already cached: {{ (images_to_pull | length) - (images_to_download | length) }}
+      Images successfully pulled: {{ success_count.stdout }}
+      Failed image pulls: {{ failed_images.stdout_lines | default([]) | length }}
+      
+      {% if failed_images.stdout != "" %}
+      Failed Images:
+      {{ failed_images.stdout }}
+      {% endif %}
+      
+      Critical images present: {{ critical_images.stdout }}
+    dest: "{{ it_dep_dir }}/smo-image-pull-report.txt"
+  tags: prepull
+
+
+- name: Create image pull directory for tracking
+  file:
+    path: /tmp/smo-image-pull
+    state: directory
+  tags: prepull
+
+- name: Detect container runtime
+  block:
+    - name: Check for crictl (containerd)
+      command: which crictl
+      register: crictl_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check for docker
+      command: which docker
+      register: docker_check
+      failed_when: false
+      changed_when: false
+
+    - name: Set container runtime command
+      set_fact:
+        detected_ctr_command: "{{ 'crictl' if crictl_check.rc == 0 else ('docker' if docker_check.rc == 0 else ctr_command) }}"
+
+  tags: prepull
+
+- name: Check already pulled images
+  shell: |
+    {% if detected_ctr_command == 'crictl' %}
+    crictl images | grep "{{ item }}" || echo "not-found"
+    {% elif detected_ctr_command == 'docker' %}
+    docker images --format "{{ '{{' }}.Repository{{ '}}' }}:{{ '{{' }}.Tag{{ '}}' }}" | grep "{{ item }}" || echo "not-found"
+    {% else %}
+    echo "not-found"
+    {% endif %}
+  register: existing_images
+  loop: "{{ images_to_pull | default([]) }}"
+  changed_when: false
+  failed_when: false
+  when: images_to_pull is defined and images_to_pull | length > 0
+  tags: prepull
+
+- name: Filter images that need to be pulled
+  set_fact:
+    images_to_download: "{{ images_to_pull | zip(existing_images.results | map(attribute='stdout')) | selectattr('1', 'equalto', 'not-found') | map(attribute='0') | list }}"
+  when: images_to_pull is defined and images_to_pull | length > 0
+  tags: prepull
+
+- name: Display images to download
+  debug:
+    msg: "Need to download {{ images_to_download | default([]) | length }} new images"
+  when: images_to_download is defined
+  tags: prepull
+
+- name: Pull Docker images in parallel batches
+  shell: |
+    image="{{ item }}"
+    echo "Pulling image: $image"
+    
+    {% if detected_ctr_command == 'crictl' %}
+    # Using crictl for containerd
+    if timeout {{ image_pull_timeout }} crictl pull "$image" 2>&1; then
+      echo "Successfully pulled $image with crictl"
+      echo "$image" >> /tmp/smo-image-pull/success.log
+    else
+      echo "Failed to pull $image" >&2
+      echo "$image" >> /tmp/smo-image-pull/failed.log
+      exit 1
+    fi
+    {% elif detected_ctr_command == 'docker' %}
+    # Using docker
+    if timeout {{ image_pull_timeout }} docker pull "$image" 2>&1; then
+      echo "Successfully pulled $image with docker"
+      echo "$image" >> /tmp/smo-image-pull/success.log
+    else
+      echo "Failed to pull $image" >&2
+      echo "$image" >> /tmp/smo-image-pull/failed.log
+      exit 1
+    fi
+    {% else %}
+    echo "No supported container runtime found" >&2
+    exit 1
+    {% endif %}
+  register: image_pull_result
+  loop: "{{ images_to_download | default([]) }}"
+  when: images_to_download is defined and images_to_download | length > 0
+  async: "{{ image_pull_timeout }}"
+  poll: 0
+  changed_when: true
+  failed_when: false
+  tags: prepull
+
+- name: Wait for image pull tasks to complete
+  async_status:
+    jid: "{{ item.ansible_job_id }}"
+  register: image_pull_jobs
+  until: image_pull_jobs.finished
+  retries: "{{ (image_pull_timeout / 10) | int }}"
+  delay: 10
+  loop: "{{ image_pull_result.results | default([]) }}"
+  when: images_to_download is defined and images_to_download | length > 0
+  failed_when: false
+  tags: prepull
+
+- name: Check for failed image pulls
+  shell: |
+    if [ -f /tmp/smo-image-pull/failed.log ]; then
+      cat /tmp/smo-image-pull/failed.log
+    fi
+  register: failed_images
+  changed_when: false
+  failed_when: false
+  tags: prepull
+
+- name: Display failed images warning
+  debug:
+    msg: 
+      - "WARNING: The following images failed to pull:"
+      - "{{ failed_images.stdout_lines }}"
+      - "Deployment may experience delays or failures"
+  when: failed_images.stdout != ""
+  tags: prepull
+
+- name: Count successfully pulled images
+  shell: |
+    if [ -f /tmp/smo-image-pull/success.log ]; then
+      wc -l < /tmp/smo-image-pull/success.log
+    else
+      echo "0"
+    fi
+  register: success_count
+  changed_when: false
+  tags: prepull
+
+- name: Display pull summary
+  debug:
+    msg:
+      - "=========================================="
+      - "Image Pre-pull Summary"
+      - "=========================================="
+      - "Container runtime: {{ detected_ctr_command }}"
+      - "Total images identified: {{ images_to_pull | default([]) | length }}"
+      - "Images already cached: {{ (images_to_pull | default([]) | length) - (images_to_download | default([]) | length) }}"
+      - "Images downloaded: {{ success_count.stdout }}"
+      - "Failed pulls: {{ failed_images.stdout_lines | default([]) | length }}"
+      - "=========================================="
+  tags: prepull
+
+- name: Verify critical images are present
+  shell: |
+    {% if detected_ctr_command == 'crictl' %}
+    crictl images | grep -E "(onap|oran|policy|aai|sdc|sdnc)" | wc -l
+    {% elif detected_ctr_command == 'docker' %}
+    docker images | grep -E "(onap|oran|policy|aai|sdc|sdnc)" | wc -l
+    {% else %}
+    echo "0"
+    {% endif %}
+  register: critical_images
+  changed_when: false
+  tags: prepull
+
+- name: Warn if no critical images found
+  debug:
+    msg: "WARNING: No critical ONAP/O-RAN images found. Deployment may fail."
+  when: critical_images.stdout | int == 0
+  tags: prepull
+
+- name: Save image pull report
+  copy:
+    content: |
+      SMO Image Pre-pull Report
+      =========================
+      Date: {{ ansible_date_time.iso8601 }}
+      Container Runtime: {{ detected_ctr_command }}
+      
+      Total images in list: {{ images_to_pull | default([]) | length }}
+      Images already cached: {{ (images_to_pull | default([]) | length) - (images_to_download | default([]) | length) }}
       Images successfully pulled: {{ success_count.stdout }}
       Failed image pulls: {{ failed_images.stdout_lines | default([]) | length }}
       

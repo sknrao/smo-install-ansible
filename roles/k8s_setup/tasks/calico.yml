@@ -1,0 +1,29 @@
+---
+# Tasks for installing Calico CNI
+# This should be included in your roles/k8s_setup/tasks/main.yaml
+
+- name: Display message - Installing CNI
+  debug:
+    msg:
+      - "***************************************************************************************************************"
+      - "                       Installing CNI                                                                         "
+      - "***************************************************************************************************************"
+
+- name: Download Calico manifest
+  get_url:
+    url: https://raw.githubusercontent.com/projectcalico/calico/v3.30.1/manifests/calico.yaml
+    dest: /tmp/calico.yaml
+    mode: '0644'
+    timeout: 60
+  retries: 3
+  delay: 5
+
+- name: Apply Calico manifest
+  command: kubectl apply -f /tmp/calico.yaml
+  register: calico_apply
+  changed_when: "'created' in calico_apply.stdout or 'configured' in calico_apply.stdout"
+
+- name: Clean up temporary Calico manifest
+  file:
+    path: /tmp/calico.yaml
+    state: absent

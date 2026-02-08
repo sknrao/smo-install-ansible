@@ -1,0 +1,191 @@
+# Image pre-pull tasks to avoid deployment timeouts
+
+- name: Check if generate-image-list.sh script exists
+  stat:
+    path: "{{ image_list_script }}"
+  register: image_script
+  tags: prepull
+
+- name: Fail if image list script is missing
+  fail:
+    msg: "Image list generation script not found at {{ image_list_script }}"
+  when: not image_script.stat.exists
+  tags: prepull
+
+- name: Make image list script executable
+  file:
+    path: "{{ image_list_script }}"
+    mode: '0755'
+  tags: prepull
+
+- name: Generate image list from Helm charts
+  shell: |
+    cd {{ it_dep_dir }}/smo-install
+    {{ image_list_script }}
+  register: image_list_generation
+  changed_when: false
+  tags: prepull
+
+- name: Check if image list was created
+  stat:
+    path: "{{ it_dep_dir }}/smo-install/image-list.txt"
+  register: image_list_file
+  tags: prepull
+
+- name: Read generated image list
+  slurp:
+    src: "{{ it_dep_dir }}/smo-install/image-list.txt"
+  register: image_list_content
+  when: image_list_file.stat.exists
+  tags: prepull
+
+- name: Parse image list
+  set_fact:
+    images_to_pull: "{{ (image_list_content.content | b64decode).split('\n') | select('match', '^[^#].*') | list }}"
+  when: image_list_file.stat.exists
+  tags: prepull
+
+- name: Display number of images to pull
+  debug:
+    msg: "Found {{ images_to_pull | length }} images to pre-pull"
+  tags: prepull
+
+- name: Create image pull directory for tracking
+  file:
+    path: /tmp/smo-image-pull
+    state: directory
+  tags: prepull
+
+- name: Check already pulled images
+  shell: |
+    {{ ctr_command }} images ls -q | grep "{{ item }}" || echo "not-found"
+  register: existing_images
+  loop: "{{ images_to_pull }}"
+  changed_when: false
+  failed_when: false
+  when: images_to_pull is defined and images_to_pull | length > 0
+  tags: prepull
+
+- name: Filter images that need to be pulled
+  set_fact:
+    images_to_download: "{{ images_to_pull | zip(existing_images.results | map(attribute='stdout')) | selectattr('1', 'equalto', 'not-found') | map(attribute='0') | list }}"
+  when: images_to_pull is defined and images_to_pull | length > 0
+  tags: prepull
+
+- name: Display images to download
+  debug:
+    msg: "Need to download {{ images_to_download | length }} new images"
+  when: images_to_download is defined
+  tags: prepull
+
+- name: Pull Docker images in parallel batches
+  shell: |
+    image="{{ item }}"
+    echo "Pulling image: $image"
+    
+    # Try with microk8s first
+    if timeout {{ image_pull_timeout }} {{ ctr_command }} images pull "$image" 2>&1; then
+      echo "Successfully pulled $image with {{ ctr_command }}"
+      echo "$image" >> /tmp/smo-image-pull/success.log
+    else
+      echo "Failed to pull $image" >&2
+      echo "$image" >> /tmp/smo-image-pull/failed.log
+      exit 1
+    fi
+  register: image_pull_result
+  loop: "{{ images_to_download }}"
+  when: images_to_download is defined and images_to_download | length > 0
+  async: "{{ image_pull_timeout }}"
+  poll: 0
+  changed_when: true
+  failed_when: false
+  tags: prepull
+
+- name: Wait for image pull tasks to complete
+  async_status:
+    jid: "{{ item.ansible_job_id }}"
+  register: image_pull_jobs
+  until: image_pull_jobs.finished
+  retries: "{{ (image_pull_timeout / 10) | int }}"
+  delay: 10
+  loop: "{{ image_pull_result.results }}"
+  when: images_to_download is defined and images_to_download | length > 0
+  failed_when: false
+  tags: prepull
+
+- name: Check for failed image pulls
+  shell: |
+    if [ -f /tmp/smo-image-pull/failed.log ]; then
+      cat /tmp/smo-image-pull/failed.log
+    fi
+  register: failed_images
+  changed_when: false
+  failed_when: false
+  tags: prepull
+
+- name: Display failed images warning
+  debug:
+    msg: 
+      - "WARNING: The following images failed to pull:"
+      - "{{ failed_images.stdout_lines }}"
+      - "Deployment may experience delays or failures"
+  when: failed_images.stdout != ""
+  tags: prepull
+
+- name: Count successfully pulled images
+  shell: |
+    if [ -f /tmp/smo-image-pull/success.log ]; then
+      wc -l < /tmp/smo-image-pull/success.log
+    else
+      echo "0"
+    fi
+  register: success_count
+  changed_when: false
+  tags: prepull
+
+- name: Display pull summary
+  debug:
+    msg:
+      - "=========================================="
+      - "Image Pre-pull Summary"
+      - "=========================================="
+      - "Total images identified: {{ images_to_pull | length }}"
+      - "Images already cached: {{ (images_to_pull | length) - (images_to_download | default([]) | length) }}"
+      - "Images downloaded: {{ success_count.stdout }}"
+      - "Failed pulls: {{ failed_images.stdout_lines | default([]) | length }}"
+      - "=========================================="
+  tags: prepull
+
+- name: Verify critical images are present
+  shell: |
+    {{ ctr_command }} images ls | grep -E "(onap|oran|policy|aai|sdc|sdnc)" | wc -l
+  register: critical_images
+  changed_when: false
+  tags: prepull
+
+- name: Warn if no critical images found
+  debug:
+    msg: "WARNING: No critical ONAP/O-RAN images found. Deployment may fail."
+  when: critical_images.stdout | int == 0
+  tags: prepull
+
+- name: Save image pull report
+  copy:
+    content: |
+      SMO Image Pre-pull Report
+      =========================
+      Date: {{ ansible_date_time.iso8601 }}
+      
+      Total images in list: {{ images_to_pull | length }}
+      Images already cached: {{ (images_to_pull | length) - (images_to_download | default([]) | length) }}
+      Images successfully pulled: {{ success_count.stdout }}
+      Failed image pulls: {{ failed_images.stdout_lines | default([]) | length }}
+      
+      {% if failed_images.stdout != "" %}
+      Failed Images:
+      {{ failed_images.stdout }}
+      {% endif %}
+      
+      Critical images present: {{ critical_images.stdout }}
+    dest: "{{ it_dep_dir }}/smo-image-pull-report.txt"
+  tags: prepull

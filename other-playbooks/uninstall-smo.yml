@@ -1,0 +1,95 @@
+---
+- name: Uninstall O-RAN SMO
+  hosts: smo_servers
+  become: yes
+  gather_facts: no
+  
+  vars:
+    k8s_namespace: "onap"
+    it_dep_dir: "/opt/o-ran-sc/it-dep"
+    cleanup_pvcs: false  # Set to true to delete persistent volumes
+  
+  tasks:
+    - name: Check if ONAP custom plugins are available
+      command: helm plugin list
+      register: helm_plugins
+      changed_when: false
+      failed_when: false
+
+    - name: Undeploy ONAP using custom undeploy plugin
+      block:
+        - name: Get ONAP parent release name
+          shell: |
+            helm list -n {{ k8s_namespace }} | grep -E 'onap\s' | awk '{print $1}'
+          register: onap_release
+          changed_when: false
+          failed_when: false
+
+        - name: Undeploy ONAP using helm undeploy plugin
+          shell: |
+            helm undeploy {{ onap_release.stdout }} -n {{ k8s_namespace }}
+          when: onap_release.stdout != ""
+          register: undeploy_result
+          failed_when: false
+
+        - name: Display undeploy output
+          debug:
+            var: undeploy_result.stdout_lines
+          when: undeploy_result.stdout is defined
+
+      when: "'undeploy' in helm_plugins.stdout"
+
+    - name: Fallback to standard uninstall if undeploy plugin not available
+      block:
+        - name: List all Helm releases
+          shell: |
+            helm list -n {{ k8s_namespace }} -q
+          register: helm_releases
+          failed_when: false
+          changed_when: false
+
+        - name: Uninstall Helm releases
+          shell: |
+            helm uninstall {{ item }} -n {{ k8s_namespace }}
+          loop: "{{ helm_releases.stdout_lines }}"
+          when: helm_releases.stdout_lines | length > 0
+          failed_when: false
+
+      when: "'undeploy' not in helm_plugins.stdout"
+
+    - name: Wait for pods to terminate
+      shell: |
+        {{ kubectl_command }} wait --for=delete pods --all -n {{ k8s_namespace }} --timeout=600s || true
+      failed_when: false
+
+    - name: Clean up PVCs (optional)
+      shell: |
+        {{ kubectl_command }} delete pvc --all -n {{ k8s_namespace }} || true
+      when: cleanup_pvcs | default(false)
+      failed_when: false
+
+    - name: Delete namespace
+      shell: |
+        {{ kubectl_command }} delete namespace {{ k8s_namespace }} --grace-period=0 --force || true
+      failed_when: false
+
+    - name: Delete network namespace
+      shell: |
+        {{ kubectl_command }} delete namespace network --grace-period=0 --force || true
+      failed_when: false
+
+    - name: Stop ChartMuseum if running
+      shell: |
+        docker stop chartmuseum && docker rm chartmuseum
+      failed_when: false
+
+    - name: Display uninstall status
+      debug:
+        msg: 
+          - "=========================================="
+          - "SMO Uninstallation Completed"
+          - "=========================================="
+          - "Namespace {{ k8s_namespace }} has been removed"
+          - "All Helm releases have been undeployed"
+          - "PVCs deleted: {{ cleanup_pvcs }}"
+          - "=========================================="

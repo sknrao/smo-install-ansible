@@ -9,7 +9,7 @@
 
 - name: Verify ONAP components are ready
   shell: |
-    microk8s kubectl wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout=300s
+    {{ kubectl_command }} wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout=300s
   register: onap_ready
   retries: 3
   delay: 30
@@ -21,7 +21,7 @@
   block:
     - name: Get Policy Management Service endpoint
       shell: |
-        microk8s kubectl get svc -n {{ onap_namespace }} | grep policymanagementservice | awk '{print $3":"$5}' | cut -d: -f1-2
+        {{ kubectl_command }} get svc -n {{ onap_namespace }} | grep policymanagementservice | awk '{print $3":"$5}' | cut -d: -f1-2
       register: policy_svc
       changed_when: false
       failed_when: false
@@ -29,7 +29,7 @@
 
     - name: Create A1 Policy ConfigMap
       shell: |
-        cat <<EOF | microk8s kubectl apply -f -
+        cat <<EOF | {{ kubectl_command }} apply -f -
         apiVersion: v1
         kind: ConfigMap
         metadata:
@@ -56,7 +56,7 @@
   block:
     - name: Get DMaaP Message Router endpoint
       shell: |
-        microk8s kubectl get svc -n {{ onap_namespace }} | grep message-router | awk '{print $3":"$5}' | cut -d: -f1-2
+        {{ kubectl_command }} get svc -n {{ onap_namespace }} | grep message-router | awk '{print $3":"$5}' | cut -d: -f1-2
       register: dmaap_svc
       changed_when: false
       failed_when: false
@@ -64,7 +64,7 @@
 
     - name: Create DMaaP topics ConfigMap
       shell: |
-        cat <<EOF | microk8s kubectl apply -f -
+        cat <<EOF | {{ kubectl_command }} apply -f -
         apiVersion: v1
         kind: ConfigMap
         metadata:
@@ -93,7 +93,7 @@
   block:
     - name: Get simulator pods
       shell: |
-        microk8s kubectl get pods -n network -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo ""
+        {{ kubectl_command }} get pods -n network -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo ""
       register: simulator_pods
       changed_when: false
       tags: postconfigure
@@ -108,7 +108,7 @@
 
     - name: Create simulator registry ConfigMap
       shell: |
-        cat <<EOF | microk8s kubectl apply -f -
+        cat <<EOF | {{ kubectl_command }} apply -f -
         apiVersion: v1
         kind: ConfigMap
         metadata:
@@ -130,7 +130,7 @@
   block:
     - name: Get SDNC endpoint
       shell: |
-        microk8s kubectl get svc -n {{ onap_namespace }} | grep sdnc | head -1 | awk '{print $3":"$5}' | cut -d: -f1-2
+        {{ kubectl_command }} get svc -n {{ onap_namespace }} | grep sdnc | head -1 | awk '{print $3":"$5}' | cut -d: -f1-2
       register: sdnc_svc
       changed_when: false
       failed_when: false
@@ -138,7 +138,7 @@
 
     - name: Create integration ConfigMap
       shell: |
-        cat <<EOF | microk8s kubectl apply -f -
+        cat <<EOF | {{ kubectl_command }} apply -f -
         apiVersion: v1
         kind: ConfigMap
         metadata:

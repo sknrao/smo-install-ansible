@@ -72,8 +72,9 @@
       tags: helm
 
     - name: Install ONAP deploy plugin from OOM
-      shell: |
-        helm plugin install {{ it_dep_dir }}/smo-install/oom/kubernetes/helm/plugins/deploy
+      kubernetes.core.helm_plugin:
+        plugin_path: https://github.com/sknrao/helm-deploy
+        state: present
       when: not deploy_plugin.stat.exists
       register: deploy_install
       failed_when: deploy_install.rc != 0 and 'plugin already exists' not in deploy_install.stderr
@@ -86,8 +87,9 @@
       tags: helm
 
     - name: Install ONAP undeploy plugin from OOM
-      shell: |
-        helm plugin install {{ it_dep_dir }}/smo-install/oom/kubernetes/helm/plugins/undeploy
+      kubernetes.core.helm_plugin:
+        plugin_path: https://github.com/sknrao/helm-undeploy
+        state: present
       when: not undeploy_plugin.stat.exists
       register: undeploy_install
       failed_when: undeploy_install.rc != 0 and 'plugin already exists' not in undeploy_install.stderr
@@ -98,7 +100,7 @@
       register: helm_plugins
       changed_when: false
       tags: helm
-
+    
     - name: Display installed Helm plugins
       debug:
         var: helm_plugins.stdout_lines
