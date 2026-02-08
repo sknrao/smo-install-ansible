@@ -248,7 +248,7 @@
     {% else %}
     helm upgrade --install nonrtric oran-snapshot/nonrtric \
     {% endif %}
-      --namespace {{ onap_namespace }} \
+      --namespace {{ nonrtric_namespace }} \
       {% if override_files_check.results[1].stat.exists %}
       --values {{ effective_nonrtric_override }} \
       {% endif %}

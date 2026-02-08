@@ -97,6 +97,7 @@ sdnc_endpoint: "http://sdnc:8282"
 
 # ONAP Configuration
 onap_namespace: "onap"
+nonrtric_namespace: "nonrtric"
 onap_components:
   - portal
   - policy
