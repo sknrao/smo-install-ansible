@@ -179,12 +179,41 @@
     helm_repo_suffix: "{{ '-staging' if deployment_mode == 'snapshot' else '' }}"
   tags: install
 
+- name: Read strimzi.enabled from override YAML
+  command: >
+    yq e '.strimzi.enabled' {{ onap_override }}
+  register: strimzi_enabled
+  changed_when: false
+  failed_when:
+    - strimzi_enabled.rc != 0
+    - strimzi_enabled.stdout | length == 0
+
+- name: Set INSTALL_STRIMZI fact
+  set_fact:
+    install_strimzi: "{{ strimzi_enabled.stdout | trim }}"
+
+- name: Determine Strimzi Helm repo
+  set_fact:
+    strimzi_helm_repo: >-
+      {{ 'local' if helm_repo == 'local' else 'strimzi' }}
+  when: install_strimzi == 'true'
+
+- name: Install Strimzi Kafka Operator
+  command: >
+    helm upgrade --install strimzi-kafka-operator
+    strimzi/strimzi-kafka-operator
+    --namespace strimzi-system
+    --version 0.45.0
+    --set watchAnyNamespace=true
+    --create-namespace
+  when: install_strimzi == 'true'
+
 - name: Deploy ONAP components
   shell: |
     {% if use_chartmuseum %}
     helm deploy {{ onap_namespace }} local/onap \
     {% else %}
-    helm deploy {{ onap_namespace }} onap/onap{{ helm_repo_suffix }} \
+    helm deploy {{ onap_namespace }} oran-snapshot/onap \
     {% endif %}
       --namespace {{ onap_namespace }} \
       --create-namespace \
@@ -196,6 +225,7 @@
       --post-renderer {{ post_renderer_script }} \
       {% endif %}
       --timeout {{ helm_timeout }}s
+      --wait
   args:
     chdir: "{{ it_dep_dir }}/smo-install"
   environment:
@@ -207,7 +237,7 @@
 
 - name: Wait for ONAP deployments to stabilize
   pause:
-    seconds: 60
+    seconds: 300
   when: deploy_onap and onap_install.rc == 0
   tags: install
 
@@ -216,7 +246,7 @@
     {% if use_chartmuseum %}
     helm install nonrtric local/nonrtric \
     {% else %}
-    helm install nonrtric oran/nonrtric{{ helm_repo_suffix }} \
+    helm upgrade --install nonrtric oran-snapshot/nonrtric \
     {% endif %}
       --namespace {{ onap_namespace }} \
       {% if override_files_check.results[1].stat.exists %}
