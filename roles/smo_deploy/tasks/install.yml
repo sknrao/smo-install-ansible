@@ -1,6 +1,19 @@
 ---
 # SMO installation tasks
 
+- name: Create required namespaces
+  command: kubectl create namespace {{ item }}
+  loop:
+    - "{{ onap_namespace }}"
+    - "{{ nonrtric_namespace }}"
+    - "strimzi-system"  # If strimzi is enabled
+  register: ns_creation
+  failed_when:
+    - ns_creation.rc != 0
+    - "'AlreadyExists' not in ns_creation.stderr"
+  changed_when: "'created' in ns_creation.stdout"
+  tags: install
+
 - name: Setup post-renderer if enabled
   block:
     - name: Create post-renderer script directory
@@ -164,7 +177,7 @@
 - name: Check if SMO is already deployed
   shell: |
     {{ kubectl_command }} get deployment -n {{ onap_namespace }} | grep -i onap || true
-  register: smo_deployed
+  register: onap_deployed
   changed_when: false
   tags: install
 
@@ -182,7 +195,7 @@
         {{ kubectl_command }} wait --for=delete pods --all -n {{ onap_namespace }} --timeout=600s || true
       tags: install
 
-  when: force_reinstall and smo_deployed.stdout != ""
+  when: force_reinstall and onap_deployed.stdout != ""
 
 - name: Set Helm repository based on mode
   set_fact:
@@ -215,11 +228,11 @@
     --version 0.45.0
     --set watchAnyNamespace=true
     --create-namespace
-  when: install_strimzi == 'true'
+  when: not onap_successful
 
 - name: Deploy ONAP components
   shell: |
-    helm deploy --debug {{ onap_namespace }} {{ helm_repo }}/onap \
+    helm deploy --debug {{ onap_namespace }} oran-snapshot/onap \
       --namespace {{ onap_namespace }} \
       --create-namespace \
       {% if override_files_check.results[0].stat.exists %}
@@ -234,20 +247,29 @@
     chdir: "{{ it_dep_dir }}/smo-install"
   environment:
     POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
-  when: deploy_onap
+  when: (deploy_onap) and (not onap_successful)
   register: onap_install
   failed_when: onap_install.rc != 0 and not cleanup_on_failure
   tags: install
 
+- name: Display ONAP deployment error details
+  debug:
+    msg:
+      - "ONAP deployment failed!"
+      - "Return code: {{ onap_install.rc }}"
+      - "Error output: {{ onap_install.stderr }}"
+      - "Check logs with: kubectl logs -n {{ onap_namespace }} -l app=<component>"
+  when: onap_install.failed | default(false)
+
 - name: Wait for ONAP deployments to stabilize
   pause:
     seconds: 300
-  when: deploy_onap and onap_install.rc == 0
+  when: deploy_onap and not onap_successful
   tags: install
 
 - name: Deploy Non-RT RIC
   shell: |
-    helm upgrade --install oran-nonrtric {{ helm_repo }}/nonrtric \
+    helm upgrade --install oran-nonrtric oran-snapshot/nonrtric \
       --namespace {{ nonrtric_namespace }} \
       {% if override_files_check.results[1].stat.exists %}
       -f {{ effective_nonrtric_override }} \

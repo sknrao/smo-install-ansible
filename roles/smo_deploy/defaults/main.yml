@@ -162,3 +162,6 @@ jq_version: "1.8.1"
 
 yq_binary_url: "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
 yq_install_path: "/usr/local/bin/yq"
+
+# Dummy flags -- to skip certain task while testin
+onap_successful: true

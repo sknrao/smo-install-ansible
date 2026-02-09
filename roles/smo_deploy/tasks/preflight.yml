@@ -75,7 +75,10 @@
   ansible.builtin.get_url:
     url: "{{ yq_binary_url }}"
     dest: "{{ yq_install_path }}"
+    timeout: 60
     mode: '0755' # Makes the file executable
+  retries: 5
+  delay: 10
 
 - name: Verify yq installation
   ansible.builtin.command:

@@ -199,6 +199,7 @@
         release_namespace: mariadb-operator
         wait: no
       register: mariadb_crds_install
+      when: not onap_successful
 
     - name: Install MariaDB operator (non-blocking)
       kubernetes.core.helm:
@@ -207,6 +208,7 @@
         release_namespace: mariadb-operator
         wait: no
       register: mariadb_operator_install
+      when: not onap_successful
 
 - name: Wait for OpenEBS installation to complete
   async_status:
