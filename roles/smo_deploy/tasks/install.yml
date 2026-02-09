@@ -279,15 +279,15 @@
       --post-renderer {{ post_renderer_script }} \
       {% endif %}
       --timeout {{ helm_timeout }}s \
-      --wait
   args:
     chdir: "{{ it_dep_dir }}/smo-install"
   environment:
     POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
-  when: deploy_nonrtric
+  when: deploy_nonrtric and not onap_successful
   register: nonrtric_install
   failed_when: nonrtric_install.rc != 0 and not cleanup_on_failure
   tags: install
+
 
 - name: Wait for Kong deployment to be ready
   command: >
@@ -295,53 +295,53 @@
     deployment/oran-nonrtric-kong 
     -n {{ nonrtric_namespace }} 
     --timeout=15m
-  when: deploy_nonrtric and nonrtric_install.rc == 0
+    #when: deploy_nonrtric and nonrtric_install.rc == 0
+  when: deploy_nonrtric and not onap_successful
   tags: install
 
-- name: Deploy Network Simulators (optional)
-  block:
-    - name: Check if simulators override file exists
-      stat:
-        path: "{{ effective_simulators_override }}"
-      register: simulators_override_check
-      tags: install
+    #- name: Deploy Network Simulators (optional)
+    #block:
+    #- name: Check if simulators override file exists
+    #  stat:
+    #    path: "{{ effective_simulators_override }}"
+    #  register: simulators_override_check
+    #  tags: install
 
-    - name: Wait for ONAP and Non-RT RIC to be ready before deploying simulators
-      shell: |
-        {{ kubectl_command }} wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout={{ pod_ready_timeout }}s
-      retries: 2
-      delay: 30
-      tags: install
+    #- name: Wait for ONAP and Non-RT RIC to be ready before deploying simulators
+    #  shell: |
+    #    {{ kubectl_command }} wait --for=condition=Ready pods --all -n {{ onap_namespace }} --timeout={{ pod_ready_timeout }}s
+    #  retries: 2
+    #  delay: 30
+    #  tags: install
 
-    - name: Deploy DU/RU Simulators
-      shell: |
-        {% if use_chartmuseum %}
-        helm install network-simulators local/network-simulators \
-        {% else %}
-        helm install network-simulators oran/network-simulators{{ helm_repo_suffix }} \
-        {% endif %}
-          --namespace network \
-          --create-namespace \
-          {% if simulators_override_check.stat.exists %}
-          --values {{ effective_simulators_override }} \
-          {% endif %}
-          {% if enable_post_renderer %}
-          --post-renderer {{ post_renderer_script }} \
-          {% endif %}
-          --timeout {{ helm_timeout }}s \
-          --wait
-      args:
-        chdir: "{{ it_dep_dir }}/smo-install"
-      environment:
-        POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
-      register: simulators_install
-      failed_when: simulators_install.rc != 0 and not cleanup_on_failure
-      tags: install
-
-  when: deploy_oran_components and (deploy_onap or deploy_nonrtric)
-  tags: 
-    - install
-    - simulators
+    #- name: Deploy DU/RU Simulators
+    #  shell: |
+    #    {% if use_chartmuseum %}
+    #    helm install network-simulators local/network-simulators \
+    #    {% else %}
+    #    helm install network-simulators oran/network-simulators{{ helm_repo_suffix }} \
+    #    {% endif %}
+    #      --namespace network \
+    #      --create-namespace \
+    #      {% if simulators_override_check.stat.exists %}
+    #      --values {{ effective_simulators_override }} \
+    #      {% endif %}
+    #      {% if enable_post_renderer %}
+    #      --post-renderer {{ post_renderer_script }} \
+    #      {% endif %}
+    #      --timeout {{ helm_timeout }}s \
+    #      --wait
+    #  args:
+    #    chdir: "{{ it_dep_dir }}/smo-install"
+    #  environment:
+    #    POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
+    #  register: simulators_install
+    #  failed_when: simulators_install.rc != 0 and not cleanup_on_failure
+    #  tags: install
+    #when: deploy_oran_components and (deploy_onap or deploy_nonrtric)
+    #tags: 
+    #- install
+    #- simulators
 
 - name: Ensure SMO namespace exists
   command: kubectl create namespace smo
@@ -354,7 +354,7 @@
 
 - name: Install ORAN SMO via Helm
   shell: |
-    helm upgrade --install oran-smo {{ helm_repo }}/smo \
+    helm upgrade --install oran-smo oran-snapshot/smo \
       --namespace smo \
       -f {{ effective_nonrtric_override }} \
       {% if enable_post_renderer %}
@@ -365,7 +365,7 @@
     chdir: "{{ it_dep_dir }}/smo-install"
   environment:
     POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
-  when: deploy_smo
+  when: deploy_smo and not onap_successful
   register: smo_install
   failed_when: smo_install.rc != 0 and not cleanup_on_failure
   tags: install
@@ -386,7 +386,7 @@
     smo_secrets_indexes: "{{ range(0, smo_secrets_size.stdout | int) | list }}"
 
 - name: Process SMO secrets
-  include_tasks: process_smo_secret.yml
+  include_tasks: "{{ role_path }}/tasks/process_smo_secret.yml"
   loop: "{{ smo_secrets_indexes }}"
   loop_control:
     loop_var: smo_secret_index

@@ -54,6 +54,7 @@ local_registry_port: 5000
 deploy_onap: true
 deploy_nonrtric: true
 deploy_oran_components: false
+deploy_smo: true
 
 # Deployment Flavor Configuration
 # Flavors define different deployment configurations (small, medium, large, etc.)
