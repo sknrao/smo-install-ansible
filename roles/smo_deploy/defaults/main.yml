@@ -53,13 +53,13 @@ local_registry_port: 5000
 # SMO Components
 deploy_onap: true
 deploy_nonrtric: true
-deploy_oran_components: true
+deploy_oran_components: false
 
 # Deployment Flavor Configuration
 # Flavors define different deployment configurations (small, medium, large, etc.)
 # Available flavors are typically found in helm-override/<flavor>/ directory
 deployment_flavor: "default"  # Options: default, small, medium, large, cnf, custom
-deployment_mode: "release"     # Options: release, snapshot, latest
+deployment_mode: "snapshot"     # Options: release, snapshot, latest
 
 # Override Files by Flavor
 # These map to the helm-override directory structure in the repo

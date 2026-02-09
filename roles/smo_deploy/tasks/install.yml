@@ -113,6 +113,16 @@
     - install
     - post-renderer
 
+
+- name: Set Helm repository based on mode
+  set_fact:
+    helm_repo: >-
+      {% if deployment_mode == 'dev' %}local
+      {% elif deployment_mode == 'snapshot' %}oran-snapshot
+      {% else %}oran-release{% endif %}
+  tags: install
+
+
 - name: Determine override files based on flavor and custom settings
   set_fact:
     effective_onap_override: "{{ custom_onap_override if custom_onap_override != '' else (it_dep_dir + '/smo-install/' + onap_override_file) }}"
@@ -210,22 +220,17 @@
 
 - name: Deploy ONAP components
   shell: |
-    {% if use_chartmuseum %}
-    helm deploy {{ onap_namespace }} local/onap \
-    {% else %}
-    helm deploy {{ onap_namespace }} oran-snapshot/onap \
-    {% endif %}
+    helm deploy --debug {{ onap_namespace }} {{ helm_repo }}/onap \
       --namespace {{ onap_namespace }} \
       --create-namespace \
       {% if override_files_check.results[0].stat.exists %}
-      --values {{ effective_onap_override }} \
+      -f {{ effective_onap_override }} \
       {% endif %}
       --set global.flavor={{ deployment_flavor }} \
       {% if enable_post_renderer %}
       --post-renderer {{ post_renderer_script }} \
       {% endif %}
       --timeout {{ helm_timeout }}s
-      --wait
   args:
     chdir: "{{ it_dep_dir }}/smo-install"
   environment:
@@ -243,15 +248,12 @@
 
 - name: Deploy Non-RT RIC
   shell: |
-    {% if use_chartmuseum %}
-    helm install nonrtric local/nonrtric \
-    {% else %}
-    helm upgrade --install nonrtric oran-snapshot/nonrtric \
-    {% endif %}
+    helm upgrade --install oran-nonrtric {{ helm_repo }}/nonrtric \
       --namespace {{ nonrtric_namespace }} \
       {% if override_files_check.results[1].stat.exists %}
-      --values {{ effective_nonrtric_override }} \
+      -f {{ effective_nonrtric_override }} \
       {% endif %}
+      --set nonrtric.persistence.mountPath="/dockerdata-nfs/deployment-{{ ansible_date_time.epoch }}" \
       {% if enable_post_renderer %}
       --post-renderer {{ post_renderer_script }} \
       {% endif %}
@@ -264,6 +266,15 @@
   when: deploy_nonrtric
   register: nonrtric_install
   failed_when: nonrtric_install.rc != 0 and not cleanup_on_failure
+  tags: install
+
+- name: Wait for Kong deployment to be ready
+  command: >
+    kubectl wait --for=condition=available 
+    deployment/oran-nonrtric-kong 
+    -n {{ nonrtric_namespace }} 
+    --timeout=15m
+  when: deploy_nonrtric and nonrtric_install.rc == 0
   tags: install
 
 - name: Deploy Network Simulators (optional)
@@ -321,16 +332,26 @@
     - "'created' in smo_ns.stdout"
 
 - name: Install ORAN SMO via Helm
-  command: >
-    helm upgrade --install oran-smo
-    oran-snapshot/smo
-    --namespace smo
-    -f {{ nonrtric_override_file }}
-    --timeout 15m
+  shell: |
+    helm upgrade --install oran-smo {{ helm_repo }}/smo \
+      --namespace smo \
+      -f {{ effective_nonrtric_override }} \
+      {% if enable_post_renderer %}
+      --post-renderer {{ post_renderer_script }} \
+      {% endif %}
+      --timeout 15m
+  args:
+    chdir: "{{ it_dep_dir }}/smo-install"
+  environment:
+    POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
+  when: deploy_smo
+  register: smo_install
+  failed_when: smo_install.rc != 0 and not cleanup_on_failure
+  tags: install
 
 - name: Get number of SMO secrets defined in override YAML
   command: >
-    yq '.smo.secrets | length' {{ overrideyaml }}
+    yq '.smo.secrets | length' {{ onap_override_file }}
   register: smo_secrets_size
   changed_when: false
   failed_when: smo_secrets_size.rc != 0
