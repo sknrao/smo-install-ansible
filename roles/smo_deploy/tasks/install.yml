@@ -191,12 +191,11 @@
 
 - name: Read strimzi.enabled from override YAML
   command: >
-    yq e '.strimzi.enabled' {{ onap_override_file }}
+    yq e '.strimzi.enabled' {{ effective_onap_override }}
   register: strimzi_enabled
   changed_when: false
   failed_when:
     - strimzi_enabled.rc != 0
-    - strimzi_enabled.stdout | length == 0
 
 - name: Set INSTALL_STRIMZI fact
   set_fact:
@@ -351,7 +350,7 @@
 
 - name: Get number of SMO secrets defined in override YAML
   command: >
-    yq '.smo.secrets | length' {{ onap_override_file }}
+    yq '.smo.secrets | length' {{ effective_nonrtric_override }}
   register: smo_secrets_size
   changed_when: false
   failed_when: smo_secrets_size.rc != 0

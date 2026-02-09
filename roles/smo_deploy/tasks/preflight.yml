@@ -65,6 +65,29 @@
   when: ansible_os_family == "RedHat"
   tags: preflight
 
+- name: Ensure dependencies are installed (wget might be needed)
+  ansible.builtin.apt:
+    name: wget
+    state: present
+    update_cache: true
+
+- name: Download the yq binary
+  ansible.builtin.get_url:
+    url: "{{ yq_binary_url }}"
+    dest: "{{ yq_install_path }}"
+    mode: '0755' # Makes the file executable
+
+- name: Verify yq installation
+  ansible.builtin.command:
+    cmd: yq --version
+  register: yq_version_output
+  changed_when: false
+  check_mode: false
+
+- name: Print yq version
+  ansible.builtin.debug:
+    var: yq_version_output.stdout
+
 - name: Install Python packages
   pip:
     name:
