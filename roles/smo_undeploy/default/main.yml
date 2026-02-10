@@ -1,0 +1,40 @@
+---
+# defaults file for smo-uninstall
+
+# Timeout values in seconds
+namespace_deletion_timeout: 600
+helm_uninstall_timeout: 300
+
+# Namespaces to clean up
+smo_namespaces:
+  - onap
+  - strimzi-system
+  - mariadb-operator
+  - nonrtric
+  - smo
+  - openebs
+
+# NonRTRIC PersistentVolumes
+nonrtric_pvs:
+  - nonrtric-pv1
+  - nonrtric-pv2
+  - nonrtric-pv3
+
+# Storage paths to clean
+storage_paths:
+  - /dockerdata-nfs
+  - /dockerdata
+
+# StorageClass configuration
+smo_storage_class_name: smo-storage
+
+# Helm release configuration
+helm_release_name: oran-nonrtric
+helm_release_namespace: nonrtric
+
+# OpenEBS configuration
+openebs_release_name: openebs
+openebs_namespace: openebs
+
+# Whether to ignore errors during cleanup
+ignore_cleanup_errors: yes

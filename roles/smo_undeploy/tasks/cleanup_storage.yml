@@ -1,0 +1,36 @@
+---
+# Storage cleanup tasks
+
+- name: Delete all remaining PersistentVolumes
+  ansible.builtin.shell: |
+    kubectl delete pv --all
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete SMO StorageClass
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: smo-storage
+  ignore_errors: yes
+
+- name: Uninstall OpenEBS using helm
+  kubernetes.core.helm:
+    name: openebs
+    namespace: openebs
+    state: absent
+    wait: yes
+  ignore_errors: yes
+
+- name: Delete volume storage directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /dockerdata-nfs
+    - /dockerdata
+  become: yes
+  ignore_errors: yes

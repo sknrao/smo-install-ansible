@@ -1,0 +1,10 @@
+---
+# requirements.yml
+# Install with: ansible-galaxy install -r requirements.yml
+
+collections:
+  - name: kubernetes.core
+    version: ">=2.3.0"
+  
+  - name: community.general
+    version: ">=5.0.0"

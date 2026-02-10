@@ -1,0 +1,29 @@
+---
+# SMO namespace cleanup tasks
+
+- name: Delete smo namespace
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: smo
+    state: absent
+    wait: yes
+    wait_timeout: 600
+  ignore_errors: yes
+
+- name: Get list of Released PersistentVolumes after SMO cleanup
+  ansible.builtin.shell: |
+    kubectl get pv --no-headers | grep Released | awk '{print $1}'
+  register: released_pvs_smo
+  changed_when: false
+  failed_when: false
+
+- name: Delete Released PersistentVolumes after SMO cleanup
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: PersistentVolume
+    name: "{{ item }}"
+    state: absent
+  loop: "{{ released_pvs_smo.stdout_lines }}"
+  when: released_pvs_smo.stdout_lines | length > 0
+  ignore_errors: yes

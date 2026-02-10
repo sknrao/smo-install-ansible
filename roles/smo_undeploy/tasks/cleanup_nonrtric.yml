@@ -1,0 +1,82 @@
+---
+# NonRTRIC cleanup tasks
+
+- name: Get helm values for oran-nonrtric
+  ansible.builtin.shell: |
+    helm get values oran-nonrtric -n nonrtric -o json
+  register: helm_values
+  failed_when: false
+  changed_when: false
+
+- name: Parse installKong value from helm release
+  ansible.builtin.set_fact:
+    install_kong: "{{ (helm_values.stdout | from_json).nonrtric.installKong | default(false) }}"
+  when: helm_values.rc == 0
+  failed_when: false
+
+- name: Handle Kong cleanup if installed
+  when: 
+    - helm_values.rc == 0
+    - install_kong | default(false) | bool
+  block:
+    - name: Display warning about Kong deletion
+      ansible.builtin.debug:
+        msg: "Warning - deleting Kong routes and services for ServiceManager."
+
+    - name: Get ServiceManager pod name
+      ansible.builtin.shell: |
+        kubectl get pods -o custom-columns=NAME:.metadata.name \
+          -l app.kubernetes.io/name=servicemanager --no-headers -n nonrtric
+      register: servicemanager_pod
+      changed_when: false
+      failed_when: false
+
+    - name: Execute Kong cleanup script
+      ansible.builtin.shell: |
+        kubectl exec {{ servicemanager_pod.stdout }} -n nonrtric -- ./kongclearup
+      when: servicemanager_pod.stdout | length > 0
+      ignore_errors: yes
+
+    - name: Display error if ServiceManager pod not found
+      ansible.builtin.debug:
+        msg: "Error - Servicemanager pod not found, didn't delete Kong routes and services for ServiceManager."
+      when: servicemanager_pod.stdout | length == 0
+
+- name: Delete nonrtric namespace
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: nonrtric
+    state: absent
+    wait: yes
+    wait_timeout: 600
+  ignore_errors: yes
+
+- name: Delete nonrtric PersistentVolumes
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: PersistentVolume
+    name: "{{ item }}"
+    state: absent
+  loop:
+    - nonrtric-pv1
+    - nonrtric-pv2
+    - nonrtric-pv3
+  ignore_errors: yes
+
+- name: Get list of Released PersistentVolumes after NonRTRIC cleanup
+  ansible.builtin.shell: |
+    kubectl get pv --no-headers | grep Released | awk '{print $1}'
+  register: released_pvs_nonrtric
+  changed_when: false
+  failed_when: false
+
+- name: Delete Released PersistentVolumes after NonRTRIC cleanup
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: PersistentVolume
+    name: "{{ item }}"
+    state: absent
+  loop: "{{ released_pvs_nonrtric.stdout_lines }}"
+  when: released_pvs_nonrtric.stdout_lines | length > 0
+  ignore_errors: yes

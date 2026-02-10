@@ -1,0 +1,57 @@
+---
+# ONAP cleanup tasks
+
+- name: Delete all Kafka topics in onap namespace
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: KafkaTopic
+    namespace: onap
+    state: absent
+  ignore_errors: yes
+
+- name: Delete onap namespace
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: onap
+    state: absent
+    wait: yes
+    wait_timeout: 600
+  ignore_errors: yes
+
+- name: Delete strimzi-system namespace
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: strimzi-system
+    state: absent
+    wait: yes
+    wait_timeout: 600
+  ignore_errors: yes
+
+- name: Delete mariadb-operator namespace
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: mariadb-operator
+    state: absent
+    wait: yes
+    wait_timeout: 600
+  ignore_errors: yes
+
+- name: Get list of Released PersistentVolumes after ONAP cleanup
+  ansible.builtin.shell: |
+    kubectl get pv --no-headers | grep Released | awk '{print $1}'
+  register: released_pvs_onap
+  changed_when: false
+  failed_when: false
+
+- name: Delete Released PersistentVolumes after ONAP cleanup
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: PersistentVolume
+    name: "{{ item }}"
+    state: absent
+  loop: "{{ released_pvs_onap.stdout_lines }}"
+  when: released_pvs_onap.stdout_lines | length > 0
+  ignore_errors: yes

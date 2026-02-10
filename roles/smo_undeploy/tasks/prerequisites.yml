@@ -1,0 +1,22 @@
+---
+# Prerequisites tasks
+
+- name: Check if jq is installed
+  ansible.builtin.command: jq --version
+  register: jq_check
+  failed_when: false
+  changed_when: false
+
+- name: Install jq if not present
+  when: jq_check.rc != 0
+  block:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+      become: yes
+
+    - name: Install jq
+      ansible.builtin.apt:
+        name: jq
+        state: present
+      become: yes

@@ -1,0 +1,29 @@
+---
+# Final cleanup tasks
+
+- name: Display cleanup completion message
+  ansible.builtin.debug:
+    msg: "SMO uninstallation completed successfully"
+
+- name: Verify no remaining SMO-related namespaces
+  ansible.builtin.shell: |
+    kubectl get namespaces | grep -E 'onap|nonrtric|smo|strimzi|mariadb-operator|openebs' || true
+  register: remaining_namespaces
+  changed_when: false
+
+- name: Display remaining namespaces (if any)
+  ansible.builtin.debug:
+    msg: "Warning: The following SMO-related namespaces may still exist: {{ remaining_namespaces.stdout_lines }}"
+  when: remaining_namespaces.stdout | length > 0
+
+- name: Verify no remaining PersistentVolumes
+  ansible.builtin.shell: |
+    kubectl get pv
+  register: remaining_pvs
+  changed_when: false
+  failed_when: false
+
+- name: Display remaining PersistentVolumes (if any)
+  ansible.builtin.debug:
+    msg: "Remaining PersistentVolumes: {{ remaining_pvs.stdout_lines }}"
+  when: remaining_pvs.stdout_lines | length > 0

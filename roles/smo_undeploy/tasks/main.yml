@@ -1,0 +1,20 @@
+---
+# tasks file for smo-uninstall
+
+- name: Include prerequisite tasks
+  ansible.builtin.include_tasks: prerequisites.yml
+
+- name: Include ONAP cleanup tasks
+  ansible.builtin.include_tasks: cleanup_onap.yml
+
+- name: Include NonRTRIC cleanup tasks
+  ansible.builtin.include_tasks: cleanup_nonrtric.yml
+
+- name: Include SMO cleanup tasks
+  ansible.builtin.include_tasks: cleanup_smo.yml
+
+- name: Include storage cleanup tasks
+  ansible.builtin.include_tasks: cleanup_storage.yml
+
+- name: Include final cleanup tasks
+  ansible.builtin.include_tasks: cleanup_final.yml
