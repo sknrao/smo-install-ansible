@@ -299,6 +299,27 @@
   when: deploy_nonrtric and not onap_successful
   tags: install
 
+- name: Get number of nonrtric secrets defined in override YAML
+  command: >
+    yq '.nonrtric.secrets | length' {{ effective_nonrtric_override }}
+  register: nonrtric_secrets_size
+  changed_when: false
+  failed_when: nonrtric_secrets_size.rc != 0
+
+- name: Exit early if no secrets to copy
+  meta: end_play
+  when: nonrtric_secrets_size.stdout | int == 0
+
+- name: Build NONRTRIC secrets list
+  set_fact:
+    nonrtric_secrets_indexes: "{{ range(0, nonrtric_secrets_size.stdout | int) | list }}"
+
+- name: Process NONRTRIC secrets
+  include_tasks: "{{ role_path }}/tasks/process_nonrtric_secret.yml"
+  loop: "{{ nonrtric_secrets_indexes }}"
+  loop_control:
+    loop_var: nonrtric_secret_index
+    
     #- name: Deploy Network Simulators (optional)
     #block:
     #- name: Check if simulators override file exists
