@@ -3,7 +3,7 @@
 # File: smo_uninstall_playbook.yml
 
 - name: Uninstall SMO Components from Kubernetes Cluster
-  hosts: kubernetes_master
+  hosts: all
   become: yes
   gather_facts: yes
   
@@ -37,7 +37,7 @@
       when: not ansible_check_mode
   
   roles:
-    - role: smo-uninstall
+    - role: smo_undeploy
 
   post_tasks:
     - name: Display completion message

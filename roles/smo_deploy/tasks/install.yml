@@ -283,20 +283,22 @@
     chdir: "{{ it_dep_dir }}/smo-install"
   environment:
     POST_RENDERER_CONFIG: "{{ post_renderer_config }}"
-  when: deploy_nonrtric and not onap_successful
+  when: deploy_nonrtric and not nonrtric_successful
   register: nonrtric_install
   failed_when: nonrtric_install.rc != 0 and not cleanup_on_failure
   tags: install
 
-
 - name: Wait for Kong deployment to be ready
-  command: >
-    kubectl wait --for=condition=available 
-    deployment/oran-nonrtric-kong 
-    -n {{ nonrtric_namespace }} 
-    --timeout=15m
-    #when: deploy_nonrtric and nonrtric_install.rc == 0
-  when: deploy_nonrtric and not onap_successful
+  command: kubectl wait --for=condition=available deployment/oran-nonrtric-kong -n {{ nonrtric_namespace }} --timeout=15m
+  register: kong_wait
+  failed_when: false  # Don't fail installation if Kong isn't ready
+  when: deploy_nonrtric and nonrtric_install.rc == 0
+  tags: install
+
+- name: Log Kong deployment status
+  debug:
+    msg: "{{ 'Kong deployment ready' if kong_wait.rc == 0 else 'Kong deployment not ready - continuing anyway' }}"
+  when: deploy_nonrtric and nonrtric_install.rc == 0
   tags: install
 
 - name: Get number of nonrtric secrets defined in override YAML

@@ -7,7 +7,6 @@
     version: "{{ it_dep_branch }}"
     force: yes
   tags: cluster
-  when: not onap_successful
 
 - name: Create ONAP namespace
   shell: |

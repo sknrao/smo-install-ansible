@@ -1,5 +1,5 @@
 ---
-# NonRTRIC cleanup tasks
+# Fixed NonRTRIC cleanup tasks - handles all pod types
 
 - name: Get helm values for oran-nonrtric
   ansible.builtin.shell: |
@@ -42,6 +42,70 @@
         msg: "Error - Servicemanager pod not found, didn't delete Kong routes and services for ServiceManager."
       when: servicemanager_pod.stdout | length == 0
 
+# Delete Jobs and completed pods
+- name: Delete Jobs in nonrtric namespace
+  ansible.builtin.shell: |
+    kubectl delete jobs --all -n nonrtric --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete CronJobs in nonrtric namespace
+  ansible.builtin.shell: |
+    kubectl delete cronjobs --all -n nonrtric --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete completed/failed pods in nonrtric namespace
+  ansible.builtin.shell: |
+    kubectl delete pods --field-selector=status.phase==Succeeded -n nonrtric --grace-period=0 --force
+    kubectl delete pods --field-selector=status.phase==Failed -n nonrtric --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+# Delete workloads
+- name: Delete StatefulSets in nonrtric namespace
+  ansible.builtin.shell: |
+    kubectl delete statefulsets --all -n nonrtric --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete Deployments in nonrtric namespace
+  ansible.builtin.shell: |
+    kubectl delete deployments --all -n nonrtric --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete DaemonSets in nonrtric namespace
+  ansible.builtin.shell: |
+    kubectl delete daemonsets --all -n nonrtric --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete ReplicaSets in nonrtric namespace
+  ansible.builtin.shell: |
+    kubectl delete replicasets --all -n nonrtric --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+# Force delete all remaining pods
+- name: Force delete all remaining pods in nonrtric namespace
+  ansible.builtin.shell: |
+    kubectl delete pods --all -n nonrtric --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+- name: Wait briefly for pod deletion
+  ansible.builtin.pause:
+    seconds: 10
+
+# Delete PVCs before namespace
+- name: Delete PersistentVolumeClaims in nonrtric namespace
+  ansible.builtin.shell: |
+    kubectl delete pvc --all -n nonrtric --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+# Delete namespace
 - name: Delete nonrtric namespace
   kubernetes.core.k8s:
     api_version: v1
@@ -49,9 +113,42 @@
     name: nonrtric
     state: absent
     wait: yes
-    wait_timeout: 600
+    wait_timeout: 300
   ignore_errors: yes
 
+# Force delete if stuck
+- name: Wait for namespace deletion
+  ansible.builtin.pause:
+    seconds: 30
+
+- name: Check if nonrtric namespace still exists
+  ansible.builtin.shell: |
+    kubectl get namespace nonrtric -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound"
+  register: nonrtric_ns_status
+  failed_when: false
+  changed_when: false
+
+- name: Force delete nonrtric namespace if stuck
+  ansible.builtin.shell: |
+    kubectl patch namespace nonrtric -p '{"metadata":{"finalizers":null}}' --type=merge
+    kubectl delete namespace nonrtric --grace-period=0 --force
+  when: 
+    - nonrtric_ns_status.stdout is defined
+    - nonrtric_ns_status.stdout == "Terminating"
+  ignore_errors: yes
+
+- name: Verify nonrtric namespace is deleted
+  ansible.builtin.shell: |
+    kubectl get namespace nonrtric 2>/dev/null
+  register: nonrtric_final_check
+  failed_when: false
+  changed_when: false
+
+- name: Display namespace deletion status
+  ansible.builtin.debug:
+    msg: "NonRTRIC namespace {{ 'still exists - manual cleanup may be needed' if nonrtric_final_check.rc == 0 else 'successfully deleted' }}"
+
+# Delete specific nonrtric PVs
 - name: Delete nonrtric PersistentVolumes
   kubernetes.core.k8s:
     api_version: v1
@@ -64,6 +161,7 @@
     - nonrtric-pv3
   ignore_errors: yes
 
+# Clean up any Released PVs
 - name: Get list of Released PersistentVolumes after NonRTRIC cleanup
   ansible.builtin.shell: |
     kubectl get pv --no-headers | grep Released | awk '{print $1}'

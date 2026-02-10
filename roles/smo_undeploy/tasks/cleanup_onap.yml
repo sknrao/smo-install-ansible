@@ -1,14 +1,116 @@
 ---
-# ONAP cleanup tasks
+# Comprehensive ONAP cleanup tasks - fixes completed pods and Kafka topic issues
 
-- name: Delete all Kafka topics in onap namespace
-  kubernetes.core.k8s:
-    api_version: v1
-    kind: KafkaTopic
-    namespace: onap
-    state: absent
+# ISSUE 1 & 3 FIX: Delete ALL pod types including Jobs/Completed pods
+- name: Delete Jobs in onap namespace (creates completed pods)
+  ansible.builtin.shell: |
+    kubectl delete jobs --all -n onap --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete completed/failed pods directly in onap namespace
+  ansible.builtin.shell: |
+    kubectl delete pods --field-selector=status.phase==Succeeded -n onap --grace-period=0 --force
+    kubectl delete pods --field-selector=status.phase==Failed -n onap --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+# ISSUE 2 FIX: Properly handle Kafka topics with finalizers
+- name: Check if KafkaTopic CRD exists
+  ansible.builtin.shell: |
+    kubectl get crd kafkatopics.kafka.strimzi.io
+  register: kafkatopic_crd_check
+  failed_when: false
+  changed_when: false
+
+- name: Get list of Kafka topics in onap namespace
+  ansible.builtin.shell: |
+    kubectl get kafkatopics -n onap --no-headers 2>/dev/null | awk '{print $1}'
+  register: kafka_topics_list
+  when: kafkatopic_crd_check.rc == 0
+  failed_when: false
+  changed_when: false
+
+- name: Remove finalizers from Kafka topics (prevents stuck deletion)
+  ansible.builtin.shell: |
+    kubectl patch kafkatopic {{ item }} -n onap -p '{"metadata":{"finalizers":null}}' --type=merge
+  loop: "{{ kafka_topics_list.stdout_lines }}"
+  when: 
+    - kafkatopic_crd_check.rc == 0
+    - kafka_topics_list.stdout_lines is defined
+    - kafka_topics_list.stdout_lines | length > 0
   ignore_errors: yes
 
+- name: Force delete specific problematic Kafka topic
+  ansible.builtin.shell: |
+    kubectl delete kafkatopic acm-ppnt-sync-kt -n onap --grace-period=0 --force
+  when: kafkatopic_crd_check.rc == 0
+  ignore_errors: yes
+
+- name: Delete all Kafka topics in onap namespace
+  ansible.builtin.shell: |
+    kubectl delete kafkatopics --all -n onap --timeout=60s --grace-period=0 --force
+  when: kafkatopic_crd_check.rc == 0
+  ignore_errors: yes
+  changed_when: true
+
+# Delete workloads in proper order
+- name: Delete StatefulSets in onap namespace
+  ansible.builtin.shell: |
+    kubectl delete statefulsets --all -n onap --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete Deployments in onap namespace
+  ansible.builtin.shell: |
+    kubectl delete deployments --all -n onap --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete DaemonSets in onap namespace
+  ansible.builtin.shell: |
+    kubectl delete daemonsets --all -n onap --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete ReplicaSets in onap namespace
+  ansible.builtin.shell: |
+    kubectl delete replicasets --all -n onap --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+# Force delete ALL remaining pods
+- name: Force delete all remaining pods in onap namespace
+  ansible.builtin.shell: |
+    kubectl delete pods --all -n onap --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+- name: Wait briefly for pod deletion
+  ansible.builtin.pause:
+    seconds: 10
+
+# Delete PVCs before namespace
+- name: Delete PersistentVolumeClaims in onap namespace
+  ansible.builtin.shell: |
+    kubectl delete pvc --all -n onap --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+# Remove any remaining finalizers from namespace objects
+- name: Remove finalizers from all resources in onap namespace
+  ansible.builtin.shell: |
+    # Remove finalizers from services
+    for svc in $(kubectl get svc -n onap -o name 2>/dev/null); do
+      kubectl patch $svc -n onap -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
+    done
+    # Remove finalizers from configmaps
+    for cm in $(kubectl get cm -n onap -o name 2>/dev/null); do
+      kubectl patch $cm -n onap -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
+    done
+  ignore_errors: yes
+
+# Delete namespace
 - name: Delete onap namespace
   kubernetes.core.k8s:
     api_version: v1
@@ -16,8 +118,72 @@
     name: onap
     state: absent
     wait: yes
-    wait_timeout: 600
+    wait_timeout: 300
   ignore_errors: yes
+
+# ISSUE 2 FIX: Force delete namespace if stuck in Terminating
+- name: Wait for namespace deletion
+  ansible.builtin.pause:
+    seconds: 30
+
+- name: Check if onap namespace still exists
+  ansible.builtin.shell: |
+    kubectl get namespace onap -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound"
+  register: onap_ns_status
+  failed_when: false
+  changed_when: false
+
+- name: Force delete onap namespace if stuck in Terminating
+  ansible.builtin.shell: |
+    kubectl patch namespace onap -p '{"metadata":{"finalizers":null}}' --type=merge
+    kubectl delete namespace onap --grace-period=0 --force
+  when: 
+    - onap_ns_status.stdout is defined
+    - onap_ns_status.stdout == "Terminating"
+  ignore_errors: yes
+
+- name: Verify onap namespace is deleted
+  ansible.builtin.shell: |
+    kubectl get namespace onap 2>/dev/null
+  register: final_check
+  failed_when: false
+  changed_when: false
+
+- name: Display namespace deletion status
+  ansible.builtin.debug:
+    msg: "ONAP namespace {{ 'still exists - manual cleanup may be needed' if final_check.rc == 0 else 'successfully deleted' }}"
+
+# Cleanup for strimzi-system namespace (same issues)
+- name: Delete Jobs in strimzi-system namespace
+  ansible.builtin.shell: |
+    kubectl delete jobs --all -n strimzi-system --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete completed/failed pods in strimzi-system
+  ansible.builtin.shell: |
+    kubectl delete pods --field-selector=status.phase==Succeeded -n strimzi-system --grace-period=0 --force
+    kubectl delete pods --field-selector=status.phase==Failed -n strimzi-system --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete workloads in strimzi-system namespace
+  ansible.builtin.shell: |
+    kubectl delete deployments,statefulsets,daemonsets,replicasets --all -n strimzi-system --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Force delete all pods in strimzi-system
+  ansible.builtin.shell: |
+    kubectl delete pods --all -n strimzi-system --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete PVCs in strimzi-system namespace
+  ansible.builtin.shell: |
+    kubectl delete pvc --all -n strimzi-system --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
 
 - name: Delete strimzi-system namespace
   kubernetes.core.k8s:
@@ -26,8 +192,48 @@
     name: strimzi-system
     state: absent
     wait: yes
-    wait_timeout: 600
+    wait_timeout: 300
   ignore_errors: yes
+
+- name: Force delete strimzi-system namespace if stuck
+  ansible.builtin.shell: |
+    if kubectl get namespace strimzi-system 2>/dev/null | grep -q Terminating; then
+      kubectl patch namespace strimzi-system -p '{"metadata":{"finalizers":null}}' --type=merge
+      kubectl delete namespace strimzi-system --grace-period=0 --force
+    fi
+  ignore_errors: yes
+
+# Cleanup for mariadb-operator namespace
+- name: Delete Jobs in mariadb-operator namespace
+  ansible.builtin.shell: |
+    kubectl delete jobs --all -n mariadb-operator --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete completed/failed pods in mariadb-operator
+  ansible.builtin.shell: |
+    kubectl delete pods --field-selector=status.phase==Succeeded -n mariadb-operator --grace-period=0 --force
+    kubectl delete pods --field-selector=status.phase==Failed -n mariadb-operator --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete workloads in mariadb-operator namespace
+  ansible.builtin.shell: |
+    kubectl delete deployments,statefulsets,daemonsets,replicasets --all -n mariadb-operator --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Force delete all pods in mariadb-operator
+  ansible.builtin.shell: |
+    kubectl delete pods --all -n mariadb-operator --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete PVCs in mariadb-operator namespace
+  ansible.builtin.shell: |
+    kubectl delete pvc --all -n mariadb-operator --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
 
 - name: Delete mariadb-operator namespace
   kubernetes.core.k8s:
@@ -36,9 +242,18 @@
     name: mariadb-operator
     state: absent
     wait: yes
-    wait_timeout: 600
+    wait_timeout: 300
   ignore_errors: yes
 
+- name: Force delete mariadb-operator namespace if stuck
+  ansible.builtin.shell: |
+    if kubectl get namespace mariadb-operator 2>/dev/null | grep -q Terminating; then
+      kubectl patch namespace mariadb-operator -p '{"metadata":{"finalizers":null}}' --type=merge
+      kubectl delete namespace mariadb-operator --grace-period=0 --force
+    fi
+  ignore_errors: yes
+
+# Clean up Released PVs
 - name: Get list of Released PersistentVolumes after ONAP cleanup
   ansible.builtin.shell: |
     kubectl get pv --no-headers | grep Released | awk '{print $1}'

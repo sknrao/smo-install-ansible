@@ -74,10 +74,10 @@ custom_nonrtric_override: ""
 custom_simulators_override: ""
 
 # Pre-configuration Options
-create_service_accounts: false
-create_rbac: false
-setup_secrets: false
-configure_persistent_storage: false
+create_service_accounts: true
+create_rbac: true
+setup_secrets: true
+configure_persistent_storage: true
 
 # ONAP Credentials (change in production!)
 onap_admin_password: "demo123456!"
@@ -165,4 +165,6 @@ yq_binary_url: "https://github.com/mikefarah/yq/releases/latest/download/yq_linu
 yq_install_path: "/usr/local/bin/yq"
 
 # Dummy flags -- to skip certain task while testin
-onap_successful: true
+onap_successful: false
+nonrtric_successful: false
+

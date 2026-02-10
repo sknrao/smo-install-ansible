@@ -1,6 +1,84 @@
 ---
-# SMO namespace cleanup tasks
+# Fixed SMO namespace cleanup - handles kafka-client, minio-client, and all pod types
 
+# ISSUE 3 FIX: Delete Jobs first (they create completed pods like kafka-client, minio-client)
+- name: Delete Jobs in smo namespace
+  ansible.builtin.shell: |
+    kubectl delete jobs --all -n smo --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete CronJobs in smo namespace
+  ansible.builtin.shell: |
+    kubectl delete cronjobs --all -n smo --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+# Delete completed/failed pods that Jobs leave behind
+- name: Delete completed pods in smo namespace (kafka-client, minio-client, etc)
+  ansible.builtin.shell: |
+    kubectl delete pods --field-selector=status.phase==Succeeded -n smo --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete failed pods in smo namespace
+  ansible.builtin.shell: |
+    kubectl delete pods --field-selector=status.phase==Failed -n smo --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+# Delete workloads
+- name: Delete StatefulSets in smo namespace
+  ansible.builtin.shell: |
+    kubectl delete statefulsets --all -n smo --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete Deployments in smo namespace
+  ansible.builtin.shell: |
+    kubectl delete deployments --all -n smo --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete DaemonSets in smo namespace
+  ansible.builtin.shell: |
+    kubectl delete daemonsets --all -n smo --timeout=120s --grace-period=30
+  ignore_errors: yes
+  changed_when: true
+
+- name: Delete ReplicaSets in smo namespace
+  ansible.builtin.shell: |
+    kubectl delete replicasets --all -n smo --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+# Force delete ALL remaining pods (catches anything we missed)
+- name: Force delete all remaining pods in smo namespace
+  ansible.builtin.shell: |
+    kubectl delete pods --all -n smo --grace-period=0 --force
+  ignore_errors: yes
+  changed_when: true
+
+- name: Wait briefly for pod deletion
+  ansible.builtin.pause:
+    seconds: 10
+
+# Delete PVCs before namespace
+- name: Delete PersistentVolumeClaims in smo namespace
+  ansible.builtin.shell: |
+    kubectl delete pvc --all -n smo --timeout=60s --grace-period=0
+  ignore_errors: yes
+  changed_when: true
+
+# Remove finalizers that might block deletion
+- name: Remove finalizers from services in smo namespace
+  ansible.builtin.shell: |
+    for svc in $(kubectl get svc -n smo -o name 2>/dev/null); do
+      kubectl patch $svc -n smo -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
+    done
+  ignore_errors: yes
+
+# Delete namespace
 - name: Delete smo namespace
   kubernetes.core.k8s:
     api_version: v1
@@ -8,9 +86,42 @@
     name: smo
     state: absent
     wait: yes
-    wait_timeout: 600
+    wait_timeout: 300
   ignore_errors: yes
 
+# Force delete if stuck
+- name: Wait for namespace deletion
+  ansible.builtin.pause:
+    seconds: 30
+
+- name: Check if smo namespace still exists
+  ansible.builtin.shell: |
+    kubectl get namespace smo -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound"
+  register: smo_ns_status
+  failed_when: false
+  changed_when: false
+
+- name: Force delete smo namespace if stuck in Terminating
+  ansible.builtin.shell: |
+    kubectl patch namespace smo -p '{"metadata":{"finalizers":null}}' --type=merge
+    kubectl delete namespace smo --grace-period=0 --force
+  when: 
+    - smo_ns_status.stdout is defined
+    - smo_ns_status.stdout == "Terminating"
+  ignore_errors: yes
+
+- name: Verify smo namespace is deleted
+  ansible.builtin.shell: |
+    kubectl get namespace smo 2>/dev/null
+  register: smo_final_check
+  failed_when: false
+  changed_when: false
+
+- name: Display namespace deletion status
+  ansible.builtin.debug:
+    msg: "SMO namespace {{ 'still exists - manual cleanup may be needed' if smo_final_check.rc == 0 else 'successfully deleted' }}"
+
+# Clean up Released PVs
 - name: Get list of Released PersistentVolumes after SMO cleanup
   ansible.builtin.shell: |
     kubectl get pv --no-headers | grep Released | awk '{print $1}'
