@@ -98,6 +98,21 @@
     enabled: yes
     daemon_reload: yes
 
+- name: Ensure CRI plugin is not disabled in containerd
+  lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: '^disabled_plugins'
+    line: 'disabled_plugins = []'
+    create: yes
+  notify: restart containerd
+
+- name: Enable SystemdCgroup for containerd
+  replace:
+    path: /etc/containerd/config.toml
+    regexp: 'SystemdCgroup = false'
+    replace: 'SystemdCgroup = true'
+  notify: restart containerd
+
 - name: Configure insecure registry (if enabled)
   block:
     - name: Create registry certificate directory

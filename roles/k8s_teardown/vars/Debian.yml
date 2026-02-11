@@ -1,0 +1,27 @@
+---
+# vars file for k8s_uninstall - Debian/Ubuntu
+
+k8s_packages:
+  - kubeadm
+  - kubectl
+  - kubelet
+  - kubernetes-cni
+
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+  - docker.io
+  - docker-compose
+  - docker-registry
+
+containerd_packages:
+  - containerd
+  - containerd.io
+
+crio_packages:
+  - cri-o
+  - cri-o-runc
+  - cri-tools

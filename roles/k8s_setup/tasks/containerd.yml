@@ -1,0 +1,133 @@
+---
+############################################
+# Remove Docker Completely
+############################################
+
+- name: Remove Docker packages (Debian)
+  apt:
+    name:
+      - docker
+      - docker-engine
+      - docker.io
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
+      - containerd.io
+    state: absent
+    purge: yes
+  when: ansible_os_family == "Debian"
+
+- name: Remove Docker packages (RedHat)
+  yum:
+    name:
+      - docker
+      - docker-client
+      - docker-client-latest
+      - docker-common
+      - docker-latest
+      - docker-latest-logrotate
+      - docker-logrotate
+      - docker-engine
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+    state: absent
+  when: ansible_os_family == "RedHat"
+
+- name: Remove Docker repository (Debian)
+  apt_repository:
+    repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: absent
+  when: ansible_os_family == "Debian"
+
+############################################
+# Install containerd 1.7.x (K8s Compatible)
+############################################
+
+- name: Install containerd (Debian/Ubuntu 22.04)
+  apt:
+    name: containerd=1.7.28-0ubuntu1~22.04.1
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Check if containerd is already held
+  shell: apt-mark showhold | grep -w containerd
+  register: containerd_hold_check
+  ignore_errors: true
+  changed_when: false
+  when: ansible_os_family == "Debian"
+
+- name: Hold containerd package
+  shell: apt-mark hold containerd
+  when:
+    - ansible_os_family == "Debian"
+    - containerd_hold_check.rc != 0
+
+############################################
+# Configure containerd for Kubernetes
+############################################
+
+- name: Ensure containerd config directory exists
+  file:
+    path: /etc/containerd
+    state: directory
+    mode: '0755'
+
+- name: Generate default containerd config
+  command: containerd config default
+  register: containerd_default_config
+  changed_when: false
+
+- name: Write containerd config
+  copy:
+    dest: /etc/containerd/config.toml
+    content: "{{ containerd_default_config.stdout }}"
+    mode: '0644'
+  notify: restart containerd
+
+- name: Enable SystemdCgroup
+  replace:
+    path: /etc/containerd/config.toml
+    regexp: 'SystemdCgroup = false'
+    replace: 'SystemdCgroup = true'
+  notify: restart containerd
+
+############################################
+# Enable + Start containerd
+############################################
+
+- name: Start and enable containerd
+  systemd:
+    name: containerd
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Set crictl version
+  set_fact:
+    crictl_version: "v1.34.0"
+
+- name: Download crictl
+  get_url:
+    url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ crictl_version }}/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+    dest: /tmp/crictl.tar.gz
+    mode: '0644'
+
+- name: Extract crictl binary
+  unarchive:
+    src: /tmp/crictl.tar.gz
+    dest: /usr/local/bin/
+    remote_src: yes
+    mode: '0755'
+
+- name: Configure crictl to use containerd
+  copy:
+    dest: /etc/crictl.yaml
+    content: |
+      runtime-endpoint: unix:///var/run/containerd/containerd.sock
+      image-endpoint: unix:///var/run/containerd/containerd.sock
+      timeout: 10
+      debug: false
+    mode: '0644'
+

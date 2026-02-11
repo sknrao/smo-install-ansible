@@ -16,7 +16,7 @@ container_runtime: "containerd"
 ctr_command: "crictl"  # For containerd: "crictl", for docker: "docker"
 
 # Image Pre-pull Configuration
-prepull_images: false
+prepull_images: true
 image_pull_parallel: 5  # Number of parallel image pulls
 image_pull_timeout: 600  # Timeout per image in seconds
 image_list_script: "{{ it_dep_dir }}/smo-install/scripts/sub-scripts/generate-image-list.sh"

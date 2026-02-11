@@ -1,6 +1,6 @@
 ---
 # Kubernetes version configuration
-k8s_version: "1.28.0"  # Can be left empty for default OS version
+k8s_version: "1.32.10"  # Can be left empty for default OS version
 k8s_cni_version: ""    # CNI version (empty for default)
 docker_version: ""     # Docker version (empty for default)
 helm_version: "3.12.0"

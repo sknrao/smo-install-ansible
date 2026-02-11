@@ -1,0 +1,37 @@
+---
+# Example playbook for uninstalling Kubernetes
+# This should be run with root/sudo privileges
+
+- name: Uninstall Kubernetes from all nodes
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  roles:
+    - role: k8s_teardown
+      vars:
+        k8s_container_runtime: "docker"
+        k8s_remove_helm: true
+        k8s_flush_iptables: true
+        k8s_enable_swap: false
+        k8s_reboot_after_uninstall: false
+
+# For a multi-node cluster, use this approach:
+# 
+# - name: Uninstall Kubernetes from worker nodes first
+#   hosts: k8s_workers
+#   become: yes
+#   gather_facts: yes
+#   serial: 1  # One at a time for safety
+#   
+#   roles:
+#     - k8s_uninstall
+#
+# - name: Uninstall Kubernetes from control plane nodes
+#   hosts: k8s_masters
+#   become: yes
+#   gather_facts: yes
+#   serial: 1  # One at a time for safety
+#   
+#   roles:
+#     - k8s_uninstall

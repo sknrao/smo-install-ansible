@@ -1,13 +1,13 @@
 ---
 - name: Add Kubernetes GPG key (Ubuntu/Debian)
   apt_key:
-    url: https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key
+    url: https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key
     state: present
   when: ansible_os_family == "Debian"
 
 - name: Add Kubernetes repository (Ubuntu/Debian)
   apt_repository:
-    repo: "deb https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
+    repo: "deb https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /"
     state: present
     filename: kubernetes
   when: ansible_os_family == "Debian"
@@ -16,9 +16,9 @@
   yum_repository:
     name: kubernetes
     description: Kubernetes Repository
-    baseurl: https://pkgs.k8s.io/core:/stable:/v1.28/rpm/
+    baseurl: https://pkgs.k8s.io/core:/stable:/v1.32/rpm/
     gpgcheck: yes
-    gpgkey: https://pkgs.k8s.io/core:/stable:/v1.28/rpm/repodata/repomd.xml.key
+    gpgkey: https://pkgs.k8s.io/core:/stable:/v1.32/rpm/repodata/repomd.xml.key
   when: ansible_os_family == "RedHat"
 
 - name: Install Kubernetes packages (Ubuntu/Debian)

@@ -1,0 +1,522 @@
+---
+# Fixed tasks file for k8s_uninstall - Compatible with older Ansible versions
+# Does NOT use allow_change_held_packages parameter
+
+- name: Include OS-specific variables
+  include_vars: "{{ ansible_os_family }}.yml"
+  tags: always
+
+- name: Check if kubectl is installed
+  command: which kubectl
+  register: kubectl_check
+  failed_when: false
+  changed_when: false
+
+- name: Check if Kubernetes cluster is running
+  command: kubectl cluster-info
+  register: cluster_check
+  failed_when: false
+  changed_when: false
+  when: kubectl_check.rc == 0
+
+- name: Display warning if cluster is running
+  debug:
+    msg: "WARNING: Kubernetes cluster is running. All workloads will be destroyed."
+  when: 
+    - kubectl_check.rc == 0
+    - cluster_check.rc == 0
+
+- name: Drain node if part of cluster
+  command: "kubectl drain {{ ansible_hostname }} --delete-emptydir-data --force --ignore-daemonsets --timeout={{ k8s_drain_timeout }}s"
+  when: 
+    - kubectl_check.rc == 0
+    - cluster_check.rc == 0
+  ignore_errors: true
+
+- name: Delete node from cluster if part of cluster
+  command: "kubectl delete node {{ ansible_hostname }}"
+  when: 
+    - kubectl_check.rc == 0
+    - cluster_check.rc == 0
+  ignore_errors: true
+
+- name: Reset kubeadm
+  command: kubeadm reset -f
+  register: kubeadm_reset
+  failed_when: false
+  changed_when: kubeadm_reset.rc == 0
+
+# CRITICAL: Force kill all Kubernetes processes
+- name: Force kill all Kubernetes processes
+  shell: |
+    pkill -9 kubelet || true
+    pkill -9 kube-proxy || true
+    pkill -9 kube-apiserver || true
+    pkill -9 kube-controller || true
+    pkill -9 kube-scheduler || true
+    pkill -9 etcd || true
+  failed_when: false
+  changed_when: false
+
+- name: Wait for processes to terminate
+  pause:
+    seconds: 3
+
+- name: Stop kubelet service
+  systemd:
+    name: kubelet
+    state: stopped
+    enabled: no
+  failed_when: false
+
+- name: Stop containerd service
+  systemd:
+    name: containerd
+    state: stopped
+  failed_when: false
+
+- name: Stop docker service
+  systemd:
+    name: docker
+    state: stopped
+    enabled: no
+  failed_when: false
+  when: k8s_container_runtime == 'docker'
+
+- name: Stop crio service
+  systemd:
+    name: crio
+    state: stopped
+    enabled: no
+  failed_when: false
+  when: k8s_container_runtime == 'crio'
+
+# Force kill container runtime processes
+- name: Force kill container runtime processes
+  shell: |
+    pkill -9 containerd-shim || true
+    pkill -9 containerd || true
+    pkill -9 dockerd || true
+    pkill -9 docker-proxy || true
+  failed_when: false
+  changed_when: false
+
+- name: Wait for container processes to terminate
+  pause:
+    seconds: 3
+
+# Unmount all kubelet volumes BEFORE removing directories
+- name: Find all kubelet mounts
+  shell: cat /proc/mounts | grep '/var/lib/kubelet' | awk '{print $2}' | sort -r
+  register: kubelet_mounts
+  failed_when: false
+  changed_when: false
+
+- name: Unmount kubelet volumes (force)
+  shell: "umount -f {{ item }} 2>/dev/null || umount -l {{ item }} 2>/dev/null || true"
+  loop: "{{ kubelet_mounts.stdout_lines }}"
+  when: kubelet_mounts.stdout_lines | length > 0
+  failed_when: false
+
+- name: Find and unmount any remaining kubernetes mounts
+  shell: |
+    for mount in $(cat /proc/mounts | grep -E 'kubelet|kubernetes|pods' | awk '{print $2}' | sort -r); do
+      umount -f "$mount" 2>/dev/null || umount -l "$mount" 2>/dev/null || true
+    done
+  failed_when: false
+  changed_when: false
+
+- name: Remove all containers (docker)
+  shell: docker rm -f $(docker ps -aq)
+  failed_when: false
+  when: k8s_container_runtime == 'docker'
+
+- name: Remove all container images (docker)
+  shell: docker rmi -f $(docker images -q)
+  failed_when: false
+  when: k8s_container_runtime == 'docker'
+
+# CRITICAL FIX: Unhold packages BEFORE attempting removal
+- name: Check for held Kubernetes packages (Debian/Ubuntu)
+  shell: apt-mark showhold | grep -E 'kubeadm|kubectl|kubelet' || true
+  register: held_k8s_packages
+  failed_when: false
+  changed_when: false
+  when: ansible_os_family == "Debian"
+
+- name: Display held Kubernetes packages
+  debug:
+    msg: "Found held packages: {{ held_k8s_packages.stdout_lines }}"
+  when: 
+    - ansible_os_family == "Debian"
+    - held_k8s_packages.stdout != ""
+
+- name: Unhold Kubernetes packages individually (Debian/Ubuntu)
+  command: "apt-mark unhold {{ item }}"
+  loop:
+    - kubeadm
+    - kubectl
+    - kubelet
+  when: ansible_os_family == "Debian"
+  failed_when: false
+  register: unhold_result
+
+- name: Verify packages are unheld
+  shell: apt-mark showhold | grep -E 'kubeadm|kubectl|kubelet' || true
+  register: verify_unhold
+  failed_when: false
+  changed_when: false
+  when: ansible_os_family == "Debian"
+
+- name: Display unhold verification
+  debug:
+    msg: "{{ 'All packages successfully unheld' if verify_unhold.stdout == '' else 'WARNING: Some packages may still be held: ' + verify_unhold.stdout }}"
+  when: ansible_os_family == "Debian"
+
+# NOW remove packages (without the unsupported parameter)
+- name: Remove Kubernetes packages (Debian/Ubuntu)
+  apt:
+    name: "{{ k8s_packages }}"
+    state: absent
+    purge: yes
+    autoremove: yes
+  when: ansible_os_family == "Debian"
+  ignore_errors: true
+
+- name: Remove Kubernetes packages (RedHat/CentOS)
+  yum:
+    name: "{{ k8s_packages }}"
+    state: absent
+  when: ansible_os_family == "RedHat"
+  ignore_errors: true
+
+- name: Check for held Docker packages (Debian/Ubuntu)
+  shell: apt-mark showhold | grep -E 'docker|containerd' || true
+  register: held_docker_packages
+  failed_when: false
+  changed_when: false
+  when: 
+    - ansible_os_family == "Debian"
+    - k8s_container_runtime == 'docker'
+
+- name: Unhold Docker packages (Debian/Ubuntu)
+  command: "apt-mark unhold {{ item }}"
+  loop:
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+    - docker-buildx-plugin
+    - docker-compose-plugin
+  when: 
+    - ansible_os_family == "Debian"
+    - k8s_container_runtime == 'docker'
+  failed_when: false
+
+- name: Remove Docker packages (Debian/Ubuntu)
+  apt:
+    name: "{{ docker_packages }}"
+    state: absent
+    purge: yes
+    autoremove: yes
+  when: 
+    - ansible_os_family == "Debian"
+    - k8s_container_runtime == 'docker'
+  ignore_errors: true
+
+- name: Remove Docker packages (RedHat/CentOS)
+  yum:
+    name: "{{ docker_packages }}"
+    state: absent
+  when: 
+    - ansible_os_family == "RedHat"
+    - k8s_container_runtime == 'docker'
+  ignore_errors: true
+
+- name: Check for held containerd packages (Debian/Ubuntu)
+  shell: apt-mark showhold | grep containerd || true
+  register: held_containerd_packages
+  failed_when: false
+  changed_when: false
+  when: 
+    - ansible_os_family == "Debian"
+    - k8s_container_runtime == 'containerd'
+
+- name: Unhold containerd packages (Debian/Ubuntu)
+  command: "apt-mark unhold {{ item }}"
+  loop:
+    - containerd
+    - containerd.io
+  when: 
+    - ansible_os_family == "Debian"
+    - k8s_container_runtime == 'containerd'
+  failed_when: false
+
+- name: Remove containerd packages (Debian/Ubuntu)
+  apt:
+    name: "{{ containerd_packages }}"
+    state: absent
+    purge: yes
+    autoremove: yes
+  when: 
+    - ansible_os_family == "Debian"
+    - k8s_container_runtime == 'containerd'
+  ignore_errors: true
+
+- name: Remove containerd packages (RedHat/CentOS)
+  yum:
+    name: "{{ containerd_packages }}"
+    state: absent
+  when: 
+    - ansible_os_family == "RedHat"
+    - k8s_container_runtime == 'containerd'
+  ignore_errors: true
+
+# Clean up container runtime directories AFTER stopping services
+- name: Clean up containerd directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/containerd
+    - /run/containerd
+    - /var/run/containerd
+  ignore_errors: true
+  when: k8s_container_runtime == 'containerd'
+
+- name: Clean up docker directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/docker
+    - /var/lib/dockershim
+    - /var/run/docker.sock
+  ignore_errors: true
+  when: k8s_container_runtime == 'docker'
+
+- name: Clean up crio directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/crio
+    - /var/run/crio
+  ignore_errors: true
+  when: k8s_container_runtime == 'crio'
+
+- name: Remove Kubernetes configuration directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/kubernetes
+    - /etc/cni
+    - /opt/cni
+    - /var/lib/kubelet
+    - /var/lib/kube-proxy
+    - /var/lib/etcd
+    - /var/log/pods
+    - /var/log/containers
+    - /run/flannel
+    - /etc/systemd/system/kubelet.service.d
+    - /etc/systemd/system/kubelet.service
+    - /usr/lib/systemd/system/kubelet.service
+  ignore_errors: true
+
+- name: Remove user Kubernetes configuration
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ ansible_env.HOME }}/.kube"
+    - /root/.kube
+  ignore_errors: true
+
+- name: Remove Helm
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/local/bin/helm
+    - "{{ ansible_env.HOME }}/.helm"
+    - /root/.helm
+    - "{{ ansible_env.HOME }}/.config/helm"
+    - /root/.config/helm
+  when: k8s_remove_helm | bool
+  ignore_errors: true
+
+- name: Remove CNI plugins
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /opt/cni/bin
+    - /etc/cni/net.d
+  ignore_errors: true
+
+- name: Remove virtual network interfaces
+  shell: |
+    for iface in $(ip link show | grep -oE '(cni|flannel|docker|veth)[^:@]+' || true); do
+      ip link delete $iface 2>/dev/null || true
+    done
+    ip link delete cni0 2>/dev/null || true
+    ip link delete flannel.1 2>/dev/null || true
+    ip link delete docker0 2>/dev/null || true
+  failed_when: false
+  changed_when: false
+
+- name: Remove iptables rules
+  shell: |
+    iptables -F
+    iptables -X
+    iptables -t nat -F
+    iptables -t nat -X
+    iptables -t mangle -F
+    iptables -t mangle -X
+    iptables -t raw -F
+    iptables -t raw -X
+  failed_when: false
+  when: k8s_flush_iptables | bool
+
+- name: Remove ipvs rules
+  shell: ipvsadm --clear
+  failed_when: false
+  when: k8s_flush_iptables | bool
+
+- name: Remove Kubernetes from resolv.conf
+  lineinfile:
+    path: /etc/resolv.conf
+    regexp: 'nameserver 10\.96\.0\.10'
+    state: absent
+  failed_when: false
+
+- name: Remove Kubernetes APT repository (Debian/Ubuntu)
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/kubernetes.list
+    - /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  when: ansible_os_family == "Debian"
+
+- name: Remove Kubernetes YUM repository (RedHat/CentOS)
+  file:
+    path: /etc/yum.repos.d/kubernetes.repo
+    state: absent
+  when: ansible_os_family == "RedHat"
+
+- name: Remove Docker APT repository (Debian/Ubuntu)
+  file:
+    path: /etc/apt/sources.list.d/docker.list
+    state: absent
+  when: 
+    - ansible_os_family == "Debian"
+    - k8s_container_runtime == 'docker'
+
+- name: Remove Docker YUM repository (RedHat/CentOS)
+  file:
+    path: /etc/yum.repos.d/docker-ce.repo
+    state: absent
+  when: 
+    - ansible_os_family == "RedHat"
+    - k8s_container_runtime == 'docker'
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+
+# CRITICAL: Properly reconfigure containerd for fresh installation
+- name: Recreate containerd directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/lib/containerd
+    - /run/containerd
+    - /etc/containerd
+  when: k8s_container_runtime == 'containerd'
+
+- name: Generate default containerd configuration
+  shell: containerd config default > /etc/containerd/config.toml
+  when: k8s_container_runtime == 'containerd'
+  failed_when: false
+
+- name: Enable SystemdCgroup in containerd config
+  lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: '^\s*SystemdCgroup\s*='
+    line: '            SystemdCgroup = true'
+    state: present
+  when: k8s_container_runtime == 'containerd'
+  failed_when: false
+
+- name: Restart containerd service
+  systemd:
+    name: containerd
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  when: k8s_container_runtime == 'containerd'
+  failed_when: false
+
+- name: Wait for containerd to be ready
+  pause:
+    seconds: 5
+  when: k8s_container_runtime == 'containerd'
+
+- name: Verify containerd is running
+  systemd:
+    name: containerd
+    state: started
+  when: k8s_container_runtime == 'containerd'
+
+- name: Check for processes using Kubernetes ports
+  shell: |
+    ports=(6443 10250 10257 10259 2379 2380)
+    for port in "${ports[@]}"; do
+      if lsof -i :$port 2>/dev/null; then
+        echo "Port $port in use"
+      fi
+    done
+  register: port_check
+  failed_when: false
+  changed_when: false
+
+- name: Display warning if ports are still in use
+  debug:
+    msg: "WARNING: Some Kubernetes ports are still in use. A reboot may be required."
+  when: port_check.stdout != ""
+
+- name: Update APT cache (Debian/Ubuntu)
+  apt:
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+  failed_when: false
+
+- name: Clean YUM cache (RedHat/CentOS)
+  command: yum clean all
+  when: ansible_os_family == "RedHat"
+  failed_when: false
+
+- name: Re-enable swap if it was disabled
+  shell: |
+    for swapfile in $(grep swap /etc/fstab | grep -v '^#' | awk '{print $1}'); do
+      swapon $swapfile 2>/dev/null || true
+    done
+  failed_when: false
+  when: k8s_enable_swap | bool
+
+- name: Reboot system if requested
+  reboot:
+    msg: "Rebooting system after Kubernetes uninstallation"
+    connect_timeout: 5
+    reboot_timeout: 300
+    pre_reboot_delay: 0
+    post_reboot_delay: 30
+    test_command: uptime
+  when: k8s_reboot_after_uninstall | bool
+
+- name: Display completion message
+  debug:
+    msg: "Kubernetes has been successfully uninstalled from {{ ansible_hostname }}. System is ready for fresh installation."

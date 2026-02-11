@@ -1,0 +1,44 @@
+---
+galaxy_info:
+  role_name: k8s_uninstall
+  author: O-RAN SC
+  description: Ansible role to uninstall Kubernetes and its dependencies
+  company: O-RAN Software Community
+  
+  license: Apache-2.0
+  
+  min_ansible_version: "2.9"
+  
+  platforms:
+    - name: Ubuntu
+      versions:
+        - xenial
+        - bionic
+        - focal
+        - jammy
+    - name: Debian
+      versions:
+        - stretch
+        - buster
+        - bullseye
+    - name: EL
+      versions:
+        - 7
+        - 8
+        - 9
+  
+  galaxy_tags:
+    - kubernetes
+    - k8s
+    - kubeadm
+    - uninstall
+    - cleanup
+    - docker
+    - containerd
+    - crio
+    - container
+    - orchestration
+    - cloud
+    - infrastructure
+
+dependencies: []

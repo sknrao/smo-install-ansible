@@ -1,0 +1,23 @@
+---
+# vars file for k8s_uninstall - RedHat/CentOS
+
+k8s_packages:
+  - kubeadm
+  - kubectl
+  - kubelet
+  - kubernetes-cni
+
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+containerd_packages:
+  - containerd
+  - containerd.io
+
+crio_packages:
+  - cri-o
+  - cri-tools

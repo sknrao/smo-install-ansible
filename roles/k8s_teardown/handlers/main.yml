@@ -1,0 +1,14 @@
+---
+# handlers file for k8s_uninstall
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: restart network
+  service:
+    name: "{{ network_service }}"
+    state: restarted
+  vars:
+    network_service: "{{ 'NetworkManager' if ansible_os_family == 'RedHat' else 'networking' }}"
+  failed_when: false

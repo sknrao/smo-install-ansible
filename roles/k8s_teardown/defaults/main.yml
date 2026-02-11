@@ -1,0 +1,22 @@
+---
+# defaults file for k8s_uninstall
+
+# Container runtime used (docker, containerd, crio)
+k8s_container_runtime: "docker"
+
+# Whether to remove Helm
+k8s_remove_helm: true
+
+# Whether to flush iptables rules
+k8s_flush_iptables: true
+
+# Whether to re-enable swap after uninstall
+k8s_enable_swap: false
+
+# Whether to reboot after uninstallation
+k8s_reboot_after_uninstall: false
+
+# Timeout for drain operation (seconds)
+k8s_drain_timeout: 300
+
+remove_images: false
