@@ -5,7 +5,7 @@
     - prerequisites
 
 - name: Include Docker installation tasks
-  include_tasks: docker.yml
+  include_tasks: containerd.yml
   tags:
     - docker
 

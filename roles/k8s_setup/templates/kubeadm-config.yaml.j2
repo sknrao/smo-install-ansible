@@ -1,5 +1,13 @@
-apiVersion: kubeadm.k8s.io/v1beta3
+apiVersion: kubeadm.k8s.io/v1beta4
 kind: InitConfiguration
+bootstrapTokens:
+- groups:
+  - system:bootstrappers:kubeadm:default-node-token
+  token: 8ydb09.melxort0av9v33lk
+  ttl: 24h0m0s
+  usages:
+  - signing
+  - authentication
 localAPIEndpoint:
   advertiseAddress: {{ ansible_default_ipv4.address }}
   bindPort: 6443
@@ -7,14 +15,36 @@ nodeRegistration:
   criSocket: unix:///var/run/containerd/containerd.sock
   name: {{ k8s_node_name }}
   taints: []
+  imagePullPolicy: IfNotPresent
+  imagePullSerial: true
+timeouts:
+  discovery: 5m0s
+  controlPlaneComponentHealthCheck: 4m0s
+  etcdAPICall: 2m0s
+  kubeletHealthCheck: 4m0s
+  kubernetesAPICall: 1m0s
+  tlsBootstrap: 5m0s
+  upgradeManifests: 5m0s
 ---
-apiVersion: kubeadm.k8s.io/v1beta3
+apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
-kubernetesVersion: v{{ k8s_version if k8s_version != '' else '1.28.0' }}
+kubernetesVersion: v{{ k8s_version if k8s_version != '' else '1.35.0' }}
 controlPlaneEndpoint: {{ ansible_default_ipv4.address }}:6443
+certificateValidityPeriod: 8760h0m0s
+caCertificateValidityPeriod: 87600h0m0s
+certificatesDir: /etc/kubernetes/pki
+clusterName: smo
+controllerManager: {}
+dns: {}
+encryptionAlgorithm: RSA-2048
+imageRepository: registry.k8s.io
+etcd:
+  local:
+    dataDir: /var/lib/etcd
 networking:
   podSubnet: {{ k8s_pod_network_cidr }}
   serviceSubnet: {{ k8s_service_cidr }}
+  dnsDomain: cluster.local
 apiServer:
   certSANs:
   - {{ ansible_default_ipv4.address }}
@@ -22,7 +52,5 @@ apiServer:
   - {{ ansible_fqdn }}
   - localhost
   - 127.0.0.1
----
-apiVersion: kubelet.config.k8s.io/v1beta1
-kind: KubeletConfiguration
-cgroupDriver: systemd
+proxy: {}
+scheduler: {}
